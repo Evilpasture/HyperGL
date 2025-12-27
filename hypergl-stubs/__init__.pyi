@@ -394,7 +394,7 @@ class Context:
     ) -> Pipeline: ...
     def compute(
         self,
-        compute_shader: bytes,
+        compute_shader: str | bytes,
         resources: Iterable[BufferResource | SamplerResource | StorageBufferResource] = (),
         uniforms: Dict[str, Any] | None = None,
         uniform_data: memoryview | None = None,
