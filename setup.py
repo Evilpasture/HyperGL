@@ -58,11 +58,10 @@ setup(
     description='OpenGL Pipelines for Python',
     long_description=long_description,
     long_description_content_type='text/markdown',
-    author='Szabolcs Dombi',
-    author_email='szabolcs@szabolcsdombi.com',
+    author='Mai Huy Hiếu',
+    author_email='huyhieu0607@gmail.com',
     url='https://github.com/Evilpasture/HyperGL/',
     project_urls={
-        'Documentation': 'https://zengl.readthedocs.io/',
         'Source': 'https://github.com/Evilpasture/HyperGL/',
         'Bug Tracker': 'https://github.com/Evilpasture/HyperGL/issues/',
     },
