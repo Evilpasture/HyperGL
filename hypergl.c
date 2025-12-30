@@ -449,6 +449,13 @@ typedef Py_ssize_t intptr;
 #define GL_READ_WRITE 0x88BA
 #define GL_ALL_BARRIER_BITS 0xFFFFFFFF
 #define GL_SHADER_STORAGE_BARRIER_BIT 0x2000
+#define GL_MAP_READ_BIT 0x0001
+#define GL_MAP_WRITE_BIT 0x0002
+#define GL_MAP_PERSISTENT_BIT 0x0040
+#define GL_MAP_COHERENT_BIT 0x0080
+#define GL_CLIENT_STORAGE_BIT 0x0100
+#define GL_PERSISTENT_WRITE_FLAGS (GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT | GL_CLIENT_STORAGE_BIT)
+
 
 static int gl_initialized = 0;
 
@@ -479,6 +486,7 @@ RESOLVE(void, glBindBuffer, int, int);
 RESOLVE(void, glDeleteBuffers, int, const int *);
 RESOLVE(void, glGenBuffers, int, int *);
 RESOLVE(void, glBufferData, int, intptr, const void *, int);
+RESOLVE(void, glBufferStorage, int, intptr, const void *, int);
 RESOLVE(void, glBufferSubData, int, intptr, intptr, const void *);
 RESOLVE(void, glGetBufferSubData, int, intptr, intptr, void *);
 RESOLVE(void, glBlendEquationSeparate, int, int);
@@ -566,6 +574,8 @@ RESOLVE(void, glDispatchCompute, int, int, int);
 RESOLVE(void, glMemoryBarrier, int);
 RESOLVE(void, glBindImageTexture, int, int, int, int, int, int, int);
 RESOLVE(void, glBindBufferBase, int, int, int);
+RESOLVE(void *, glMapBufferRange, int, intptr, intptr, int);
+RESOLVE(int, glUnmapBuffer, int);
 
 #ifndef EXTERN_GL
 
@@ -631,6 +641,7 @@ static void load_gl(PyObject *loader)
     load(glDeleteBuffers);
     load(glGenBuffers);
     load(glBufferData);
+    load(glBufferStorage);
     load(glBufferSubData);
     load(glGetBufferSubData);
     load(glBlendEquationSeparate);
@@ -718,6 +729,8 @@ static void load_gl(PyObject *loader)
     load(glMemoryBarrier);
     load(glBindImageTexture);
     load(glBindBufferBase);
+    load(glMapBufferRange);
+    load(glUnmapBuffer);
 
 #undef load
 #undef check
@@ -2236,16 +2249,17 @@ static Context *meth_context(PyObject *self, PyObject *args)
 
 static Buffer *Context_meth_buffer(Context *self, PyObject *args, PyObject *kwargs)
 {
-    static char *keywords[] = {"data", "size", "access", "index", "uniform", "external", NULL};
+    static char *keywords[] = {"data", "size", "access", "index", "uniform", "storage", "external", NULL};
 
     PyObject *data = Py_None;
     PyObject *size_arg = Py_None;
     PyObject *access_arg = Py_None;
     int index = 0;
     int uniform = 0;
+    int storage = 0;
     int external = 0;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|O$OOppi", keywords, &data, &size_arg, &access_arg, &index, &uniform, &external))
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|O$OOpppi", keywords, &data, &size_arg, &access_arg, &index, &uniform, &storage, &external))
     {
         return NULL;
     }
@@ -2285,8 +2299,7 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args, PyObject *kwar
         }
     }
 
-    int target = uniform ? GL_UNIFORM_BUFFER : index ? GL_ELEMENT_ARRAY_BUFFER
-                                                     : GL_ARRAY_BUFFER;
+    int target = storage ? GL_SHADER_STORAGE_BUFFER : (uniform ? GL_UNIFORM_BUFFER : index ? GL_ELEMENT_ARRAY_BUFFER : GL_ARRAY_BUFFER);
 
     if (data != Py_None)
     {
@@ -2338,7 +2351,16 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args, PyObject *kwar
         }
         glGenBuffers(1, &buffer);
         glBindBuffer(target, buffer);
-        glBufferData(target, size, NULL, access);
+        // If the target is a Storage Buffer, use the high-perf immutable storage.
+        // Otherwise, use the standard ZenGL glBufferData for maximum compatibility.
+        if (target == GL_SHADER_STORAGE_BUFFER) { 
+            // 0x00c2 = PERSISTENT | COHERENT | WRITE
+            // 0x0100 = CLIENT_STORAGE
+            glBufferStorage(target, size, NULL, GL_PERSISTENT_WRITE_FLAGS);
+        } else {
+            // The original ZenGL line remains untouched for standard buffers
+            glBufferData(target, size, NULL, access);
+        }
     }
 
     Buffer *res = PyObject_New(Buffer, self->module_state->Buffer_type);
@@ -2364,6 +2386,37 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args, PyObject *kwar
     }
 
     return res;
+}
+
+static PyObject * Buffer_meth_bind(Buffer * self, PyObject * args) {
+    int unit;
+    if (!PyArg_ParseTuple(args, "i", &unit)) return NULL;
+    // Bind the Storage Buffer (GL_SHADER_STORAGE_BUFFER) to the specified binding point
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, unit, self->buffer);
+    Py_RETURN_NONE;
+}
+
+static PyObject * Buffer_meth_map(Buffer * self, PyObject * args) {
+    // We use the target and buffer ID stored in the struct from Context_meth_buffer
+    glBindBuffer(self->target, self->buffer);
+
+    // 0x00c2 is the magic for PERSISTENT | COHERENT | WRITE
+    // This allows Zero-Copy updates for your 10M particles
+    void * ptr = glMapBufferRange(self->target, 0, self->size, 0x00c2);
+
+    if (!ptr) {
+        PyErr_SetString(PyExc_RuntimeError, "glMapBufferRange failed");
+        return NULL;
+    }
+
+    // Return a memoryview so Numba can "own" the VRAM directly
+    return PyMemoryView_FromMemory((char *)ptr, self->size, PyBUF_WRITE);
+}
+
+static PyObject * Buffer_meth_unmap(Buffer * self, PyObject * args) {
+    glBindBuffer(self->target, self->buffer);
+    glUnmapBuffer(self->target);
+    Py_RETURN_NONE;
 }
 
 static Image *Context_meth_image(Context *self, PyObject *args, PyObject *kwargs)
@@ -4663,6 +4716,9 @@ static PyMethodDef Buffer_methods[] = {
     {"write", (PyCFunction)Buffer_meth_write, METH_VARARGS | METH_KEYWORDS, NULL},
     {"read", (PyCFunction)Buffer_meth_read, METH_VARARGS | METH_KEYWORDS, NULL},
     {"view", (PyCFunction)Buffer_meth_view, METH_VARARGS | METH_KEYWORDS, NULL},
+    {"map", (PyCFunction)Buffer_meth_map, METH_NOARGS, NULL},
+    {"unmap", (PyCFunction)Buffer_meth_unmap, METH_NOARGS, NULL},
+    {"bind", (PyCFunction)Buffer_meth_bind, METH_VARARGS, NULL}, // <--- ADD THIS LINE
     {0},
 };
 

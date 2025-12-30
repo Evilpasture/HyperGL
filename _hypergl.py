@@ -498,6 +498,8 @@ def resource_bindings(resources):
         buffer = obj['buffer']
         offset = obj.get('offset', 0)
         size = obj.get('size', buffer.size - offset)
+        if offset < 0 or size <= 0 or offset + size > buffer.size:
+            raise ValueError(f"Invalid buffer range: offset={offset}, size={size}, buffer.size={buffer.size}")
         uniform_buffers.extend([binding, buffer, offset, size])
 
     samplers = []
@@ -523,6 +525,8 @@ def resource_bindings(resources):
         buffer = obj['buffer']
         offset = obj.get('offset', 0)
         size = obj.get('size', buffer.size - offset)
+        if offset < 0 or size <= 0 or offset + size > buffer.size:
+            raise ValueError(f"Invalid buffer range: offset={offset}, size={size}, buffer.size={buffer.size}")
         storage_buffers.extend([binding, buffer, offset, size])
 
     return tuple(uniform_buffers), tuple(samplers), tuple(storage_buffers)
