@@ -231,7 +231,6 @@ typedef struct Context
     int current_depth_mask;
     int current_stencil_mask;
     int default_texture_unit;
-    int validation;
     int is_lost;
     int is_gles;
     int is_webgl;
@@ -366,15 +365,17 @@ typedef struct BufferView
 
 typedef Py_ssize_t intptr;
 
-#if ENABLE_VALIDATION // cl /DENABLE_VALIDATION=1
-    #define VALIDATE(ctx, cond, exc, fmt, ...)                   \
-        do {                                                     \
-            if ((ctx)->validation && !(cond)) {                  \
-                PyErr_Format((exc), (fmt), ##__VA_ARGS__);       \
-                return NULL;                                     \
-            }                                                    \
+#if ENABLE_VALIDATION
+    // Macro that actually performs the check
+    #define VALIDATE(ctx, cond, exc, fmt, ...)                 \
+        do {                                                   \
+            if (!(cond)) {                                     \
+                PyErr_Format((exc), (fmt), ##__VA_ARGS__);     \
+                return NULL;                                   \
+            }                                                  \
         } while (0)
 #else
+    // Macro that compiles to absolutely nothing
     #define VALIDATE(ctx, cond, exc, fmt, ...) ((void)0)
 #endif
 
@@ -2167,14 +2168,6 @@ static Context *meth_context(PyObject *self, PyObject *args, PyObject *kwargs)
 {
     ModuleState *module_state = (ModuleState *)PyModule_GetState(self);
     PyObject *loader = Py_None;
-    int validation = 0;
-
-    static char *keywords[] = {"loader", "validation", NULL};
-    
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|Op", keywords, &loader, &validation))
-    {
-        return NULL;
-    }
 
     if (module_state->default_context != Py_None)
     {
@@ -2196,7 +2189,6 @@ static Context *meth_context(PyObject *self, PyObject *args, PyObject *kwargs)
     default_framebuffer->extra = NULL;
 
     Context *res = PyObject_New(Context, module_state->Context_type);
-    res->validation = validation;
     res->gc_prev = (GCHeader *)res;
     res->gc_next = (GCHeader *)res;
     res->module_state = module_state;
@@ -2256,8 +2248,7 @@ static Context *meth_context(PyObject *self, PyObject *args, PyObject *kwargs)
         "max_combined_texture_image_units", res->limits.max_combined_texture_image_units,
         "max_vertex_attribs", res->limits.max_vertex_attribs,
         "max_draw_buffers", res->limits.max_draw_buffers,
-        "max_samples", res->limits.max_samples,
-        "validation", res->validation
+        "max_samples", res->limits.max_samples
     );
 
     int max_texture_image_units = get_limit(GL_MAX_TEXTURE_IMAGE_UNITS, 8, MAX_SAMPLER_BINDINGS + 1);
@@ -2446,16 +2437,17 @@ static PyObject * Buffer_meth_map(Buffer * self, PyObject * args) {
     VALIDATE(self->ctx, self->target == GL_SHADER_STORAGE_BUFFER, PyExc_TypeError, 
              "Mapping is only supported for Storage Buffers (ID: %d)", self->buffer);
 
-    VALIDATE(self->ctx, !self->mapped_ptr, PyExc_RuntimeError, 
-             "Buffer %d is already mapped at address %p", self->buffer, self->mapped_ptr);
-
     VALIDATE(self->ctx, self->size % 16 == 0, PyExc_ValueError, 
              "SSBO size (%d) must be 16-byte aligned for std430 layout", self->size);
 
-    if (self->mapped_ptr || self->memoryview) {
-        PyErr_SetString(PyExc_RuntimeError, "Buffer already mapped");
-        return NULL;
+    if (self->memoryview) { // already have a memoryview, return it
+        Py_INCREF(self->memoryview);
+        return self->memoryview;
     }
+
+    VALIDATE(self->ctx, !self->mapped_ptr, PyExc_RuntimeError, 
+             "Buffer %d is already mapped at address %p", self->buffer, self->mapped_ptr);
+
     if (self->is_persistently_mapped) {
         PyErr_SetString(PyExc_RuntimeError,
             "Persistent buffers can only be mapped once");
