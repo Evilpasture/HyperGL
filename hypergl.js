@@ -428,5 +428,21 @@
     hypergl_glVertexAttribDivisor(index, divisor) {
       gl.vertexAttribDivisor(index, divisor);
     },
+    hypergl_glBufferStorage(target, size, data, flags) {
+        // WebGL2 doesn't support glBufferStorage officially, 
+        // but we can shim it with bufferData for compatibility.
+        gl.bufferData(target, size, flags);
+    },
+    hypergl_glMapBufferRange(target, offset, length, access) {
+        // WebGL2 does not support direct mapping. 
+        // For the web version, we would return 0 (null) or a staged buffer.
+        return 0; 
+    },
+    hypergl_glUnmapBuffer(target) {
+        return true;
+    },
+    hypergl_glBindBufferBase(target, index, buffer) {
+        gl.bindBufferBase(target, index, glo[buffer]);
+    },
   };
 }

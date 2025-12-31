@@ -107,6 +107,7 @@ typedef struct Limits
     int max_vertex_attribs;
     int max_draw_buffers;
     int max_samples;
+    int max_shader_storage_buffer_bindings;
 } Limits;
 
 typedef struct ModuleState
@@ -220,13 +221,9 @@ typedef struct Context
     PyObject *shader_cache;
     PyObject *includes;
     GLObject *default_framebuffer;
-    PyObject *info_dict;
     DescriptorSet *current_descriptor_set;
     GlobalSettings *current_global_settings;
-    int is_mask_default;
-    int is_stencil_default;
-    int is_blend_default;
-    Viewport current_viewport;
+    PyObject *info_dict;
     int current_read_framebuffer;
     int current_draw_framebuffer;
     int current_program;
@@ -234,9 +231,15 @@ typedef struct Context
     int current_depth_mask;
     int current_stencil_mask;
     int default_texture_unit;
+    int validation;
+    int is_lost;
     int is_gles;
     int is_webgl;
-    int is_lost;
+    unsigned int is_mask_default      : 1;
+    unsigned int is_stencil_default   : 1;
+    unsigned int is_blend_default     : 1;
+    unsigned int padding_bits         : 5;
+    Viewport current_viewport;
     Limits limits;
 } Context;
 
@@ -249,6 +252,9 @@ typedef struct Buffer
     int target;
     int size;
     int access;
+    int is_persistently_mapped;
+    void *mapped_ptr;
+    PyObject *memoryview;
 } Buffer;
 
 typedef struct Image
@@ -360,6 +366,18 @@ typedef struct BufferView
 
 typedef Py_ssize_t intptr;
 
+#if ENABLE_VALIDATION // cl /DENABLE_VALIDATION=1
+    #define VALIDATE(ctx, cond, exc, fmt, ...)                   \
+        do {                                                     \
+            if ((ctx)->validation && !(cond)) {                  \
+                PyErr_Format((exc), (fmt), ##__VA_ARGS__);       \
+                return NULL;                                     \
+            }                                                    \
+        } while (0)
+#else
+    #define VALIDATE(ctx, cond, exc, fmt, ...) ((void)0)
+#endif
+
 #ifdef _WIN32
 #define GL __stdcall
 #else
@@ -454,8 +472,8 @@ typedef Py_ssize_t intptr;
 #define GL_MAP_PERSISTENT_BIT 0x0040
 #define GL_MAP_COHERENT_BIT 0x0080
 #define GL_CLIENT_STORAGE_BIT 0x0100
-#define GL_PERSISTENT_WRITE_FLAGS (GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT | GL_CLIENT_STORAGE_BIT)
-
+#define GL_PERSISTENT_WRITE_FLAGS (GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT)
+#define GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS 0x90DE
 
 static int gl_initialized = 0;
 
@@ -1892,14 +1910,14 @@ static PyObject *blit_image_face(ImageFace *src, PyObject *target_arg, PyObject 
     if (!to_int_pair(&offset, offset_arg, 0, 0))
     {
         PyErr_Format(PyExc_TypeError, "the offset must be a tuple of 2 ints");
-        return 0;
+        return NULL;
     }
 
     IntPair size;
     if (!to_int_pair(&size, size_arg, crop.width, crop.height))
     {
         PyErr_Format(PyExc_TypeError, "the size must be a tuple of 2 ints");
-        return 0;
+        return NULL;
     }
 
     int scaled = (crop.width != size.x && crop.width != -size.x) || (crop.height != size.y && crop.height != -size.y);
@@ -2145,9 +2163,18 @@ static PyObject *meth_cleanup(PyObject *self, PyObject *args)
     Py_RETURN_NONE;
 }
 
-static Context *meth_context(PyObject *self, PyObject *args)
+static Context *meth_context(PyObject *self, PyObject *args, PyObject *kwargs)
 {
     ModuleState *module_state = (ModuleState *)PyModule_GetState(self);
+    PyObject *loader = Py_None;
+    int validation = 0;
+
+    static char *keywords[] = {"loader", "validation", NULL};
+    
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|Op", keywords, &loader, &validation))
+    {
+        return NULL;
+    }
 
     if (module_state->default_context != Py_None)
     {
@@ -2169,6 +2196,7 @@ static Context *meth_context(PyObject *self, PyObject *args)
     default_framebuffer->extra = NULL;
 
     Context *res = PyObject_New(Context, module_state->Context_type);
+    res->validation = validation;
     res->gc_prev = (GCHeader *)res;
     res->gc_next = (GCHeader *)res;
     res->module_state = module_state;
@@ -2209,6 +2237,7 @@ static Context *meth_context(PyObject *self, PyObject *args)
     res->limits.max_vertex_attribs = get_limit(GL_MAX_VERTEX_ATTRIBS, 8, 64);
     res->limits.max_draw_buffers = get_limit(GL_MAX_DRAW_BUFFERS, 8, 64);
     res->limits.max_samples = get_limit(GL_MAX_SAMPLES, 1, 16);
+    res->limits.max_shader_storage_buffer_bindings = get_limit(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, 0, MAX_BUFFER_BINDINGS);
 
     const char *version = glGetString(GL_VERSION);
 
@@ -2227,7 +2256,9 @@ static Context *meth_context(PyObject *self, PyObject *args)
         "max_combined_texture_image_units", res->limits.max_combined_texture_image_units,
         "max_vertex_attribs", res->limits.max_vertex_attribs,
         "max_draw_buffers", res->limits.max_draw_buffers,
-        "max_samples", res->limits.max_samples);
+        "max_samples", res->limits.max_samples,
+        "validation", res->validation
+    );
 
     int max_texture_image_units = get_limit(GL_MAX_TEXTURE_IMAGE_UNITS, 8, MAX_SAMPLER_BINDINGS + 1);
     res->default_texture_unit = GL_TEXTURE0 + max_texture_image_units - 1;
@@ -2354,11 +2385,8 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args, PyObject *kwar
         // If the target is a Storage Buffer, use the high-perf immutable storage.
         // Otherwise, use the standard ZenGL glBufferData for maximum compatibility.
         if (target == GL_SHADER_STORAGE_BUFFER) { 
-            // 0x00c2 = PERSISTENT | COHERENT | WRITE
-            // 0x0100 = CLIENT_STORAGE
-            glBufferStorage(target, size, NULL, GL_PERSISTENT_WRITE_FLAGS);
+            glBufferStorage(target, size, NULL, GL_PERSISTENT_WRITE_FLAGS | GL_CLIENT_STORAGE_BIT);
         } else {
-            // The original ZenGL line remains untouched for standard buffers
             glBufferData(target, size, NULL, access);
         }
     }
@@ -2388,36 +2416,99 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args, PyObject *kwar
     return res;
 }
 
-static PyObject * Buffer_meth_bind(Buffer * self, PyObject * args) {
+static PyObject * Buffer_meth_bind(Buffer *self, PyObject *args)
+{
     int unit;
-    if (!PyArg_ParseTuple(args, "i", &unit)) return NULL;
-    // Bind the Storage Buffer (GL_SHADER_STORAGE_BUFFER) to the specified binding point
+    if (!PyArg_ParseTuple(args, "i", &unit))
+        return NULL;
+
+    VALIDATE(self->ctx,
+             unit >= 0 && unit < self->ctx->limits.max_shader_storage_buffer_bindings,
+             PyExc_ValueError,
+             "Binding unit %d out of range", unit);
+
+    VALIDATE(self->ctx,
+             self->buffer != 0,
+             PyExc_RuntimeError,
+             "Buffer has been released");
+
+    VALIDATE(self->ctx,
+             self->target == GL_SHADER_STORAGE_BUFFER,
+             PyExc_TypeError,
+             "Only Storage Buffers can be bound");
+
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, unit, self->buffer);
     Py_RETURN_NONE;
 }
 
+
 static PyObject * Buffer_meth_map(Buffer * self, PyObject * args) {
-    // We use the target and buffer ID stored in the struct from Context_meth_buffer
+    VALIDATE(self->ctx, self->target == GL_SHADER_STORAGE_BUFFER, PyExc_TypeError, 
+             "Mapping is only supported for Storage Buffers (ID: %d)", self->buffer);
+
+    VALIDATE(self->ctx, !self->mapped_ptr, PyExc_RuntimeError, 
+             "Buffer %d is already mapped at address %p", self->buffer, self->mapped_ptr);
+
+    VALIDATE(self->ctx, self->size % 16 == 0, PyExc_ValueError, 
+             "SSBO size (%d) must be 16-byte aligned for std430 layout", self->size);
+
+    if (self->mapped_ptr || self->memoryview) {
+        PyErr_SetString(PyExc_RuntimeError, "Buffer already mapped");
+        return NULL;
+    }
+    if (self->is_persistently_mapped) {
+        PyErr_SetString(PyExc_RuntimeError,
+            "Persistent buffers can only be mapped once");
+        return NULL;
+    }
+
+    if (self->buffer == 0) {
+        PyErr_SetString(PyExc_RuntimeError, "Cannot map buffer ID 0");
+        return NULL;
+    }
+    
     glBindBuffer(self->target, self->buffer);
-
-    // 0x00c2 is the magic for PERSISTENT | COHERENT | WRITE
-    // This allows Zero-Copy updates for your 10M particles
-    void * ptr = glMapBufferRange(self->target, 0, self->size, 0x00c2);
-
+    void * ptr = glMapBufferRange(self->target, 0, self->size, GL_PERSISTENT_WRITE_FLAGS);
     if (!ptr) {
         PyErr_SetString(PyExc_RuntimeError, "glMapBufferRange failed");
         return NULL;
     }
-
-    // Return a memoryview so Numba can "own" the VRAM directly
-    return PyMemoryView_FromMemory((char *)ptr, self->size, PyBUF_WRITE);
+    else {
+        self->is_persistently_mapped = 1;
+    }
+    self->mapped_ptr = ptr;
+    PyObject *mv = PyMemoryView_FromMemory((char*)ptr, self->size, PyBUF_WRITE);
+    if (!mv) {
+        PyErr_SetString(PyExc_RuntimeError, "Failed to create memoryview for mapped buffer");
+        self->mapped_ptr = NULL;
+        return NULL;
+    }
+    self->memoryview = mv; // no INCREF needed, PyMemoryView_FromMemory returns a new reference
+    return mv;
 }
 
-static PyObject * Buffer_meth_unmap(Buffer * self, PyObject * args) {
-    glBindBuffer(self->target, self->buffer);
-    glUnmapBuffer(self->target);
+static PyObject * Buffer_meth_unmap(Buffer *self, PyObject *args)
+{
+    VALIDATE(self->ctx,
+             self->mapped_ptr != NULL,
+             PyExc_RuntimeError,
+             "Buffer is not mapped");
+
+    VALIDATE(self->ctx,
+             self->memoryview == NULL,
+             PyExc_RuntimeError,
+             "Release the memoryview before unmapping the buffer");
+
+    if (!self->is_persistently_mapped) {
+        glBindBuffer(self->target, self->buffer);
+        glUnmapBuffer(self->target);
+    }
+
+    self->mapped_ptr = NULL;
+    self->memoryview = NULL;
     Py_RETURN_NONE;
 }
+
 
 static Image *Context_meth_image(Context *self, PyObject *args, PyObject *kwargs)
 {
@@ -2468,56 +2559,55 @@ static Image *Context_meth_image(Context *self, PyObject *args, PyObject *kwargs
         return NULL;
     }
 
-    if (texture != Py_True && texture != Py_False && texture != Py_None)
-    {
-        PyErr_Format(PyExc_TypeError, "invalid texture parameter");
-        return NULL;
-    }
-    if (samples > 1 && texture == Py_True)
-    {
-        PyErr_Format(PyExc_TypeError, "for multisampled images texture must be False");
-        return NULL;
-    }
-    if (samples < 1 || (samples & (samples - 1)) || samples > 16)
-    {
-        PyErr_Format(PyExc_ValueError, "samples must be 1, 2, 4, 8 or 16");
-        return NULL;
-    }
-    if (array < 0)
-    {
-        PyErr_Format(PyExc_ValueError, "array must not be negative");
-        return NULL;
-    }
-    if (levels > max_levels)
-    {
-        PyErr_Format(PyExc_ValueError, "too many levels");
-        return NULL;
-    }
-    if (cubemap && array)
-    {
-        PyErr_Format(PyExc_TypeError, "cubemap arrays are not supported");
-        return NULL;
-    }
-    if (samples > 1 && (array || cubemap))
-    {
-        PyErr_Format(PyExc_TypeError, "multisampled array or cubemap images are not supported");
-        return NULL;
-    }
-    if (texture == Py_False && (array || cubemap))
-    {
-        PyErr_Format(PyExc_TypeError, "for array or cubemap images texture must be True");
-        return NULL;
-    }
-    if (data != Py_None && samples > 1)
-    {
-        PyErr_Format(PyExc_ValueError, "cannot write to multisampled images");
-        return NULL;
-    }
-    if (data != Py_None && texture == Py_False)
-    {
-        PyErr_Format(PyExc_ValueError, "cannot write to renderbuffers");
-        return NULL;
-    }
+    VALIDATE(self,
+    texture == Py_True || texture == Py_False || texture == Py_None,
+    PyExc_TypeError,
+    "invalid texture parameter");
+
+    VALIDATE(self,
+        !(samples > 1 && texture == Py_True),
+        PyExc_TypeError,
+        "for multisampled images texture must be False");
+
+    VALIDATE(self,
+        samples >= 1 && !(samples & (samples - 1)) && samples <= 16,
+        PyExc_ValueError,
+        "samples must be 1, 2, 4, 8 or 16");
+
+    VALIDATE(self,
+        array >= 0,
+        PyExc_ValueError,
+        "array must not be negative");
+
+    VALIDATE(self,
+        levels <= max_levels,
+        PyExc_ValueError,
+        "too many levels");
+
+    VALIDATE(self,
+        !(cubemap && array),
+        PyExc_TypeError,
+        "cubemap arrays are not supported");
+
+    VALIDATE(self,
+        !(samples > 1 && (array || cubemap)),
+        PyExc_TypeError,
+        "multisampled array or cubemap images are not supported");
+
+    VALIDATE(self,
+        !(texture == Py_False && (array || cubemap)),
+        PyExc_TypeError,
+        "for array or cubemap images texture must be True");
+
+    VALIDATE(self,
+        !(data != Py_None && samples > 1),
+        PyExc_ValueError,
+        "cannot write to multisampled images");
+
+    VALIDATE(self,
+        !(data != Py_None && texture == Py_False),
+        PyExc_ValueError,
+        "cannot write to renderbuffers");
 
     int renderbuffer = samples > 1 || texture == Py_False;
     int target = cubemap ? GL_TEXTURE_CUBE_MAP : array ? GL_TEXTURE_2D_ARRAY
@@ -3015,6 +3105,10 @@ static PyObject *Compute_meth_run(Compute *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "|iii", &x, &y, &z))
         return NULL;
 
+    VALIDATE(self->ctx, x > 0 && y > 0 && z > 0,
+         PyExc_ValueError,
+         "Dispatch dimensions must be positive (got %d, %d, %d)", x, y, z);
+
     if (self->ctx->is_lost)
     {
         PyErr_Format(PyExc_RuntimeError, "the context is lost");
@@ -3387,10 +3481,18 @@ static PyObject *Context_meth_release(Context *self, PyObject *arg)
         if (buffer->gc_prev)
         {
             release_gc_object((GCHeader *)buffer);
-            if (!self->is_lost)
-            {
+
+            Py_XDECREF(buffer->memoryview);
+            buffer->memoryview = NULL;
+
+            buffer->mapped_ptr = NULL;
+            buffer->is_persistently_mapped = 0;
+
+            if (!self->is_lost && buffer->buffer) {
                 glDeleteBuffers(1, &buffer->buffer);
             }
+            buffer->buffer = 0;
+
             Py_DECREF(buffer);
         }
     }
@@ -3486,7 +3588,7 @@ static PyObject *Context_meth_release(Context *self, PyObject *arg)
             GCHeader *next = it->gc_next;
             if (Py_TYPE((PyObject *)it) == self->module_state->Pipeline_type)
             {
-                Py_DECREF(Context_meth_release(self, (PyObject *)it));
+                Context_meth_release(self, (PyObject *)it);
             }
             it = next;
         }
@@ -3496,11 +3598,11 @@ static PyObject *Context_meth_release(Context *self, PyObject *arg)
             GCHeader *next = it->gc_next;
             if (Py_TYPE((PyObject *)it) == self->module_state->Buffer_type)
             {
-                Py_DECREF(Context_meth_release(self, (PyObject *)it));
+                Context_meth_release(self, (PyObject *)it);
             }
             else if (Py_TYPE((PyObject *)it) == self->module_state->Image_type)
             {
-                Py_DECREF(Context_meth_release(self, (PyObject *)it));
+                Context_meth_release(self, (PyObject *)it);
             }
             it = next;
         }
@@ -4718,7 +4820,7 @@ static PyMethodDef Buffer_methods[] = {
     {"view", (PyCFunction)Buffer_meth_view, METH_VARARGS | METH_KEYWORDS, NULL},
     {"map", (PyCFunction)Buffer_meth_map, METH_NOARGS, NULL},
     {"unmap", (PyCFunction)Buffer_meth_unmap, METH_NOARGS, NULL},
-    {"bind", (PyCFunction)Buffer_meth_bind, METH_VARARGS, NULL}, // <--- ADD THIS LINE
+    {"bind", (PyCFunction)Buffer_meth_bind, METH_VARARGS, NULL},
     {0},
 };
 
