@@ -138,9 +138,18 @@ typedef struct ModuleState
 
 typedef struct GLObject
 {
-    PyObject_HEAD int uses;
+    PyObject_HEAD 
+    
+    // volatile ensures the CPU always reads the latest value from RAM,
+    // and LONG matches the Windows Atomic intrinsics requirements.
+    volatile long uses; 
+
+    // The OpenGL handle
     int obj;
-    PyObject *extra;
+
+    // This makes the object a "container," meaning it needs 
+    // tp_traverse and tp_clear in its Type definition.
+    PyObject *extra; 
 } GLObject;
 
 typedef struct BufferBinding
@@ -369,15 +378,28 @@ typedef Py_ssize_t intptr;
 #endif
 
 #ifdef _WIN32
-#define GL __stdcall
+    #include <windows.h>
+    #define HyperGL_API __stdcall
+    #define Atomic_Decrement(ptr) InterlockedDecrement((volatile LONG*)(ptr))
+    #define Atomic_Increment(ptr) InterlockedIncrement((volatile LONG*)(ptr))
 #else
-#define GL
+    #define HyperGL_API
+    #define Atomic_Decrement(ptr) __atomic_sub_fetch(ptr, 1, __ATOMIC_SEQ_CST)
+    #define Atomic_Increment(ptr) __atomic_add_fetch(ptr, 1, __ATOMIC_SEQ_CST)
+#endif
+
+#ifdef _WIN32
+    #define GL_API __stdcall
+#else
+    #define GL_API
 #endif
 
 #ifndef EXTERN_GL
-#define RESOLVE(type, name, ...) static type(GL *name)(__VA_ARGS__)
+    // This defines a static function pointer with the correct calling convention
+    #define RESOLVE(type, name, ...) static type (GL_API *name)(__VA_ARGS__)
 #else
-#define RESOLVE(type, name, ...) extern type GL name(__VA_ARGS__) __asm__("hypergl_" #name)
+    // This handles external linking, mapping the name to a prefixed version
+    #define RESOLVE(type, name, ...) extern type GL_API name(__VA_ARGS__) __asm__("hypergl_" #name)
 #endif
 
 #define GL_DEPTH_BUFFER_BIT 0x0100
@@ -1208,16 +1230,35 @@ static void bind_descriptor_set(Context *self, DescriptorSet *set)
     }
 }
 
+static int GLObject_traverse(GLObject *self, visitproc visit, void *arg) {
+    Py_VISIT(self->extra);
+    return 0;
+}
+
+static int GLObject_clear(GLObject *self) {
+    Py_CLEAR(self->extra);
+    return 0;
+}
+
 static GLObject *build_framebuffer(Context *self, PyObject *attachments)
 {
-    GLObject *cache = (GLObject *)PyDict_GetItem(self->framebuffer_cache, attachments);
-    if (cache)
+    // 1. Thread-safe Cache Lookup
+    // PyDict_GetItemRef returns 1 if found (with a new ref), 0 if not, -1 on error.
+    PyObject *cache_obj = NULL;
+    int found = PyDict_GetItemRef(self->framebuffer_cache, attachments, &cache_obj);
+    
+    if (found < 0) return NULL; // Error in dict lookup
+
+    if (found == 1) // Cache Hit
     {
-        cache->uses += 1;
-        Py_INCREF((PyObject *)cache);
+        GLObject *cache = (GLObject *)cache_obj;
+        // Atomic increment for the internal 'uses' counter
+        Atomic_Increment(&cache->uses);
+        // We already have a new reference from PyDict_GetItemRef, so we return it
         return cache;
     }
 
+    // 2. GPU Resource Creation (Same as before)
     PyObject *color_attachments = PyTuple_GetItem(attachments, 1);
     PyObject *depth_stencil_attachment = PyTuple_GetItem(attachments, 2);
 
@@ -1225,24 +1266,18 @@ static GLObject *build_framebuffer(Context *self, PyObject *attachments)
     glGenFramebuffers(1, &framebuffer);
     bind_draw_framebuffer(self, framebuffer);
     bind_read_framebuffer(self, framebuffer);
+    
     int color_attachment_count = (int)PyTuple_Size(color_attachments);
     for (int i = 0; i < color_attachment_count; ++i)
     {
         ImageFace *face = (ImageFace *)PyTuple_GetItem(color_attachments, i);
-        if (face->image->renderbuffer)
-        {
+        if (face->image->renderbuffer) {
             glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, GL_RENDERBUFFER, face->image->image);
-        }
-        else if (face->image->cubemap)
-        {
+        } else if (face->image->cubemap) {
             glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, GL_TEXTURE_CUBE_MAP_POSITIVE_X + face->layer, face->image->image, face->level);
-        }
-        else if (face->image->array)
-        {
+        } else if (face->image->array) {
             glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, face->image->image, face->level, face->layer);
-        }
-        else
-        {
+        } else {
             glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, GL_TEXTURE_2D, face->image->image, face->level);
         }
     }
@@ -1280,12 +1315,39 @@ static GLObject *build_framebuffer(Context *self, PyObject *attachments)
     glDrawBuffers(color_attachment_count, draw_buffers);
     glReadBuffer(color_attachment_count ? GL_COLOR_ATTACHMENT0 : 0);
 
-    GLObject *res = PyObject_New(GLObject, self->module_state->GLObject_type);
+    // 3. GC-Aware Allocation
+    // Since we added traverse/clear, we MUST use GC_New
+    GLObject *res = PyObject_GC_New(GLObject, self->module_state->GLObject_type);
+    if (!res) return NULL;
+
     res->obj = framebuffer;
     res->uses = 1;
-    res->extra = NULL;
+    res->extra = NULL; // Start clean for GC safety
 
-    PyDict_SetItem(self->framebuffer_cache, attachments, (PyObject *)res);
+    // 4. Update Cache (Thread-Safe way)
+    // Instead of PyDict_SetItem, we use SetDefaultRef to ensure 
+    // we don't overwrite a concurrent creation.
+    PyObject *existing = NULL;
+    int set_status = PyDict_SetDefaultRef(self->framebuffer_cache, attachments, (PyObject *)res, &existing);
+
+    if (set_status < 0) { // Error
+        Py_DECREF(res);
+        return NULL;
+    }
+
+    if (set_status == 1) { // Someone beat us to it!
+        // A different thread created this exact framebuffer while we were working.
+        // We must destroy our "losing" version and return the "winning" one.
+        glDeleteFramebuffers(1, &res->obj);
+        Py_DECREF(res); // This will call dealloc on our loser object
+        
+        GLObject *winner = (GLObject *)existing;
+        Atomic_Increment(&winner->uses);
+        return winner; 
+    }
+
+    // If set_status == 0, we successfully added our object to the cache.
+    PyObject_GC_Track(res); 
     return res;
 }
 
@@ -3293,8 +3355,8 @@ static PyObject *Context_meth_end_frame(Context *self, PyObject *args, PyObject 
         bind_program(self, 0);
         bind_vertex_array(self, 0);
 
-        self->current_descriptor_set = NULL;
-        self->current_global_settings = NULL;
+        Py_CLEAR(self->current_descriptor_set);
+        Py_CLEAR(self->current_global_settings);
 
         glActiveTexture(GL_TEXTURE0);
 
@@ -3316,6 +3378,9 @@ static PyObject *Context_meth_end_frame(Context *self, PyObject *args, PyObject 
 
     if (flush)
     {
+        // In free-threaded mode, glFlush is critical to ensure 
+        // other threads see the GPU commands being submitted.
+        // it does not ensure they are finished.
         glFlush();
     }
 
@@ -3324,70 +3389,97 @@ static PyObject *Context_meth_end_frame(Context *self, PyObject *args, PyObject 
 
 static void release_descriptor_set(Context *self, DescriptorSet *set)
 {
-    set->uses -= 1;
-    if (!set->uses)
+    if (!set) return;
+
+    // 1. ATOMIC DECREMENT
+    // In 3.14t, we must ensure only ONE thread triggers the cleanup logic
+    if (Atomic_Decrement(&set->uses) > 0) {
+        return; 
+    }
+
+    // 2. Sampler Cleanup
+    for (int i = 0; i < set->samplers.binding_count; ++i)
     {
-        for (int i = 0; i < set->samplers.binding_count; ++i)
+        GLObject *sampler = set->samplers.binding[i].sampler;
+        if (sampler)
         {
-            GLObject *sampler = set->samplers.binding[i].sampler;
-            if (sampler)
+            // Atomic decrement for the sampler too
+            if (Atomic_Decrement(&sampler->uses) == 0)
             {
-                sampler->uses -= 1;
-                if (!sampler->uses)
+                // Thread-safe dictionary removal (standard Python API)
+                remove_dict_value(self->sampler_cache, (PyObject *)sampler);
+                
+                if (!self->is_lost && sampler->obj)
                 {
-                    remove_dict_value(self->sampler_cache, (PyObject *)sampler);
-                    if (!self->is_lost)
-                    {
-                        glDeleteSamplers(1, &sampler->obj);
-                    }
+                    glDeleteSamplers(1, &sampler->obj);
+                    sampler->obj = 0;
                 }
             }
         }
-        for (int i = 0; i < set->uniform_buffers.binding_count; ++i)
-        {
-            Py_XDECREF((PyObject *)set->uniform_buffers.binding[i].buffer);
-        }
-        for (int i = 0; i < set->samplers.binding_count; ++i)
-        {
-            Py_XDECREF((PyObject *)set->samplers.binding[i].sampler);
-            Py_XDECREF((PyObject *)set->samplers.binding[i].image);
-        }
-        remove_dict_value(self->descriptor_set_cache, (PyObject *)set);
-        if (self->current_descriptor_set == set)
-        {
-            self->current_descriptor_set = NULL;
-        }
+    }
+
+    // 3. Buffer/Image Reference Release
+    // Using Py_XDECREF is safe in 3.14t because it handles internal locking
+    for (int i = 0; i < set->uniform_buffers.binding_count; ++i)
+    {
+        Py_XDECREF((PyObject *)set->uniform_buffers.binding[i].buffer);
+        set->uniform_buffers.binding[i].buffer = NULL; // Clean pointers
+    }
+
+    for (int i = 0; i < set->samplers.binding_count; ++i)
+    {
+        Py_XDECREF((PyObject *)set->samplers.binding[i].sampler);
+        Py_XDECREF((PyObject *)set->samplers.binding[i].image);
+        set->samplers.binding[i].sampler = NULL;
+        set->samplers.binding[i].image = NULL;
+    }
+
+    // 4. Cache Cleanup
+    remove_dict_value(self->descriptor_set_cache, (PyObject *)set);
+
+    // 5. Context Pointer Safety
+    if (self->current_descriptor_set == set)
+    {
+        // Use the safe clear we talked about
+        Py_CLEAR(self->current_descriptor_set);
     }
 }
 
 static void release_global_settings(Context *self, GlobalSettings *settings)
 {
-    settings->uses -= 1;
-    if (!settings->uses)
+    if (!settings) return;
+
+    // Only the thread that drops the count to 0 performs the cleanup
+    if (Atomic_Decrement(&settings->uses) == 0)
     {
         remove_dict_value(self->global_settings_cache, (PyObject *)settings);
+        
         if (self->current_global_settings == settings)
         {
-            self->current_global_settings = NULL;
+            // Use Py_CLEAR instead of raw NULL if it holds a reference
+            Py_CLEAR(self->current_global_settings);
         }
     }
 }
 
 static void release_framebuffer(Context *self, GLObject *framebuffer)
 {
-    framebuffer->uses -= 1;
-    if (!framebuffer->uses)
+    if (!framebuffer) return;
+
+    if (Atomic_Decrement(&framebuffer->uses) == 0)
     {
         remove_dict_value(self->framebuffer_cache, (PyObject *)framebuffer);
-        if (framebuffer->obj)
+        
+        if (framebuffer->obj && !self->is_lost)
         {
-            if (!self->is_lost)
-            {
-                bind_draw_framebuffer(self, 0);
-                bind_read_framebuffer(self, 0);
-                glDeleteFramebuffers(1, &framebuffer->obj);
-            }
+            // Reset context state if we are deleting the currently bound FB
+            bind_draw_framebuffer(self, 0);
+            bind_read_framebuffer(self, 0);
+            glDeleteFramebuffers(1, &framebuffer->obj);
+            framebuffer->obj = 0;
         }
+
+        // Invalidate viewport cache so the next draw call re-sets it
         self->current_viewport.x = -1;
         self->current_viewport.y = -1;
         self->current_viewport.width = -1;
@@ -3397,28 +3489,34 @@ static void release_framebuffer(Context *self, GLObject *framebuffer)
 
 static void release_program(Context *self, GLObject *program)
 {
-    program->uses -= 1;
-    if (!program->uses)
+    if (!program) return;
+
+    if (Atomic_Decrement(&program->uses) == 0)
     {
         remove_dict_value(self->program_cache, (PyObject *)program);
-        if (!self->is_lost)
+        
+        if (program->obj && !self->is_lost)
         {
             bind_program(self, 0);
             glDeleteProgram(program->obj);
+            program->obj = 0;
         }
     }
 }
 
 static void release_vertex_array(Context *self, GLObject *vertex_array)
 {
-    vertex_array->uses -= 1;
-    if (!vertex_array->uses)
+    if (!vertex_array) return;
+
+    if (Atomic_Decrement(&vertex_array->uses) == 0)
     {
         remove_dict_value(self->vertex_array_cache, (PyObject *)vertex_array);
-        if (!self->is_lost)
+        
+        if (vertex_array->obj && !self->is_lost)
         {
             bind_vertex_array(self, 0);
             glDeleteVertexArrays(1, &vertex_array->obj);
+            vertex_array->obj = 0;
         }
     }
 }
