@@ -1,11 +1,40 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "hypergl"
+version = "1.0.0"
+description = "High-performance Free-Threaded Graphics Engine for 10M Particles"
+readme = "README.md"
+authors = [{name = "Your Name"}]
+requires-python = ">=3.14.0a2"
+# This tells pip/build that this package is compatible with free-threading
+classifiers = [
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Multimedia :: Graphics",
+]
+
+[tool.setuptools]
+# Include your Python wrapper logic
+py-modules = ["_hypergl"]
+
+[[tool.setuptools.ext-modules]]
+name = "hypergl"
+sources = ["hypergl.c"]
+# kebab-case is mandatory here to match setuptools.Extension params
+include-dirs = ["C:/Users/PC/AppData/Local/Python/pythoncore-3.14t-64/include"]
+library-dirs = ["C:/Users/PC/AppData/Local/Python/pythoncore-3.14t-64/libs"]
+libraries = ["python314t", "opengl32", "user32", "gdi32"]
+extra-compile-args = ["/Zi", "/O2", "/DPy_GIL_DISABLED=1"]
+
+[tool.setuptools.package-data]
+# This ensures your __init__.pyi file is bundled into the .whl for IntelliSense
+"*" = ["*.pyi"]
 
 [tool.isort]
 line_length = 120
 multi_line_output = 5
 include_trailing_comma = true
-
-known_first_party = []
-known_third_party = ["hypergl", "_hypergl"]
+known_first_party = ["hypergl", "_hypergl"]

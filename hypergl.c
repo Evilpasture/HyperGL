@@ -136,12 +136,6 @@ typedef struct ModuleState
     PyThread_type_lock load_lock;
 } ModuleState;
 
-typedef struct GCHeader
-{
-    PyObject_HEAD struct GCHeader *gc_prev;
-    struct GCHeader *gc_next;
-} GCHeader;
-
 typedef struct GLObject
 {
     PyObject_HEAD int uses;
@@ -209,8 +203,7 @@ typedef struct GlobalSettings
 
 typedef struct Context
 {
-    PyObject_HEAD GCHeader *gc_prev;
-    GCHeader *gc_next;
+    PyObject_HEAD
     ModuleState *module_state;
     PyObject *descriptor_set_cache;
     PyObject *global_settings_cache;
@@ -244,22 +237,20 @@ typedef struct Context
 
 typedef struct Buffer
 {
-    PyObject_HEAD GCHeader *gc_prev;
-    GCHeader *gc_next;
-    Context *ctx;
-    int buffer;
-    int target;
-    int size;
-    int access;
+    PyObject_HEAD      // Handles the type and refcount
+    Context *ctx;      // Reference to the context
+    int buffer;        // OpenGL ID
+    int target;        // GL_SHADER_STORAGE_BUFFER, etc.
+    int size;          // Size in bytes
+    int access;        // Access flags
     int is_persistently_mapped;
-    void *mapped_ptr;
-    PyObject *memoryview;
+    void *mapped_ptr;  // The raw GPU pointer
+    PyObject *memoryview; // The Python view object
 } Buffer;
 
 typedef struct Image
 {
-    PyObject_HEAD GCHeader *gc_prev;
-    GCHeader *gc_next;
+    PyObject_HEAD
     Context *ctx;
     PyObject *size;
     PyObject *format;
@@ -288,8 +279,7 @@ typedef struct RenderParameters
 
 typedef struct Pipeline
 {
-    PyObject_HEAD GCHeader *gc_prev;
-    GCHeader *gc_next;
+    PyObject_HEAD
     Context *ctx;
     PyObject *create_kwargs;
     DescriptorSet *descriptor_set;
@@ -315,8 +305,7 @@ typedef struct Pipeline
 
 typedef struct Compute
 {
-    PyObject_HEAD GCHeader *gc_prev;
-    GCHeader *gc_next;
+    PyObject_HEAD
     Context *ctx;
     PyObject *create_kwargs;
     DescriptorSet *descriptor_set;
@@ -2189,8 +2178,6 @@ static Context *meth_context(PyObject *self, PyObject *args, PyObject *kwargs)
     default_framebuffer->extra = NULL;
 
     Context *res = PyObject_New(Context, module_state->Context_type);
-    res->gc_prev = (GCHeader *)res;
-    res->gc_next = (GCHeader *)res;
     res->module_state = module_state;
     res->descriptor_set_cache = PyDict_New();
     res->global_settings_cache = PyDict_New();
@@ -2383,11 +2370,6 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args, PyObject *kwar
     }
 
     Buffer *res = PyObject_New(Buffer, self->module_state->Buffer_type);
-    res->gc_prev = self->gc_prev;
-    res->gc_next = (GCHeader *)self;
-    res->gc_prev->gc_next = (GCHeader *)res;
-    res->gc_next->gc_prev = (GCHeader *)res;
-    Py_INCREF((PyObject *)res);
 
     res->ctx = self;
     res->buffer = buffer;
@@ -2428,76 +2410,79 @@ static PyObject * Buffer_meth_bind(Buffer *self, PyObject *args)
              PyExc_TypeError,
              "Only Storage Buffers can be bound");
 
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, unit, self->buffer);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, unit, self->buffer); // minor risk of segfault if buffer is invalid
     Py_RETURN_NONE;
 }
 
 
-static PyObject * Buffer_meth_map(Buffer * self, PyObject * args) {
-    VALIDATE(self->ctx, self->target == GL_SHADER_STORAGE_BUFFER, PyExc_TypeError, 
-             "Mapping is only supported for Storage Buffers (ID: %d)", self->buffer);
-
-    VALIDATE(self->ctx, self->size % 16 == 0, PyExc_ValueError, 
-             "SSBO size (%d) must be 16-byte aligned for std430 layout", self->size);
-
-    if (self->memoryview) { // already have a memoryview, return it
+static PyObject * Buffer_meth_map(Buffer *self, PyObject * args) {
+    // 1. IDEMPOTENCY: If already mapped, return existing view
+    if (self->memoryview) {
         Py_INCREF(self->memoryview);
         return self->memoryview;
     }
 
-    VALIDATE(self->ctx, !self->mapped_ptr, PyExc_RuntimeError, 
-             "Buffer %d is already mapped at address %p", self->buffer, self->mapped_ptr);
-
-    if (self->is_persistently_mapped) {
-        PyErr_SetString(PyExc_RuntimeError,
-            "Persistent buffers can only be mapped once");
-        return NULL;
-    }
-
+    // 2. VALIDATIONS: Check types and alignment BEFORE mapping
     if (self->buffer == 0) {
         PyErr_SetString(PyExc_RuntimeError, "Cannot map buffer ID 0");
         return NULL;
     }
-    
-    glBindBuffer(self->target, self->buffer);
-    void * ptr = glMapBufferRange(self->target, 0, self->size, GL_PERSISTENT_WRITE_FLAGS);
-    if (!ptr) {
-        PyErr_SetString(PyExc_RuntimeError, "glMapBufferRange failed");
-        return NULL;
-    }
-    else {
+
+    VALIDATE(self->ctx, self->target == GL_SHADER_STORAGE_BUFFER, PyExc_TypeError, 
+             "Mapping only supported for SSBOs (ID: %d)", self->buffer);
+
+    VALIDATE(self->ctx, self->size % 16 == 0, PyExc_ValueError, 
+             "SSBO size (%d) must be 16-byte aligned", self->size);
+
+    // 3. MAPPING: Only map if ptr is NULL
+    if (!self->mapped_ptr) {
+        glBindBuffer(self->target, self->buffer);
+        // Coherent flag is vital for 3.14t to avoid manual glMemoryBarrier
+        self->mapped_ptr = glMapBufferRange(self->target, 0, self->size, 
+            GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
+        
+        if (!self->mapped_ptr) {
+            PyErr_SetString(PyExc_RuntimeError, "glMapBufferRange failed");
+            return NULL;
+        }
         self->is_persistently_mapped = 1;
     }
-    self->mapped_ptr = ptr;
-    PyObject *mv = PyMemoryView_FromMemory((char*)ptr, self->size, PyBUF_WRITE);
-    if (!mv) {
-        PyErr_SetString(PyExc_RuntimeError, "Failed to create memoryview for mapped buffer");
-        self->mapped_ptr = NULL;
-        return NULL;
-    }
-    self->memoryview = mv; // no INCREF needed, PyMemoryView_FromMemory returns a new reference
-    return mv;
+
+    // 4. MEMORYVIEW: Create and cache
+    // PyMemoryView_FromMemory creates a new reference (refcount = 1)
+    PyObject *mv = PyMemoryView_FromMemory((char*)self->mapped_ptr, self->size, PyBUF_WRITE);
+    if (!mv) return NULL;
+
+    self->memoryview = mv; 
+    
+    // Return a new reference to Python (refcount becomes 2: one for struct, one for caller)
+    Py_INCREF(self->memoryview);
+    return self->memoryview;
 }
 
-static PyObject * Buffer_meth_unmap(Buffer *self, PyObject *args)
-{
-    VALIDATE(self->ctx,
-             self->mapped_ptr != NULL,
-             PyExc_RuntimeError,
-             "Buffer is not mapped");
-
-    VALIDATE(self->ctx,
-             self->memoryview == NULL,
-             PyExc_RuntimeError,
-             "Release the memoryview before unmapping the buffer");
-
-    if (!self->is_persistently_mapped) {
-        glBindBuffer(self->target, self->buffer);
-        glUnmapBuffer(self->target);
+static PyObject * Buffer_meth_unmap(Buffer *self, PyObject *args) {
+    // 1. Safety Check
+    if (!self->mapped_ptr) {
+        Py_RETURN_NONE; 
     }
 
-    self->mapped_ptr = NULL;
+    // 2. Reference Check: Memoryview must be released in Python first 
+    // to ensure no threads are currently writing to the pointer.
+    if (self->memoryview && Py_REFCNT(self->memoryview) > 1) {
+        PyErr_SetString(PyExc_RuntimeError, "Buffer memoryview is still in use by another object/thread");
+        return NULL;
+    }
+
+    // 3. Cleanup
+    glBindBuffer(self->target, self->buffer);
+    glUnmapBuffer(self->target);
+
+    // Clear internal Python references
+    Py_XDECREF(self->memoryview);
     self->memoryview = NULL;
+    self->mapped_ptr = NULL;
+    self->is_persistently_mapped = 0;
+
     Py_RETURN_NONE;
 }
 
@@ -2659,11 +2644,6 @@ static Image *Context_meth_image(Context *self, PyObject *args, PyObject *kwargs
     }
 
     Image *res = PyObject_New(Image, self->module_state->Image_type);
-    res->gc_prev = self->gc_prev;
-    res->gc_next = (GCHeader *)self;
-    res->gc_prev->gc_next = (GCHeader *)res;
-    res->gc_next->gc_prev = (GCHeader *)res;
-    Py_INCREF((PyObject *)res);
 
     res->ctx = self;
     res->size = Py_BuildValue("(ii)", width, height);
@@ -3034,12 +3014,6 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
     Py_DECREF(settings);
 
     Pipeline *res = PyObject_New(Pipeline, self->module_state->Pipeline_type);
-    res->gc_prev = self->gc_prev;
-    res->gc_next = (GCHeader *)self;
-    res->gc_prev->gc_next = (GCHeader *)res;
-    res->gc_next->gc_prev = (GCHeader *)res;
-    Py_INCREF((PyObject *)res);
-
     zeromem(&res->uniform_layout_buffer, sizeof(Py_buffer));
     zeromem(&res->uniform_data_buffer, sizeof(Py_buffer));
     zeromem(&res->viewport_data_buffer, sizeof(Py_buffer));
@@ -3195,14 +3169,6 @@ static Compute *Context_meth_compute(Context *self, PyObject *args, PyObject *kw
     Py_DECREF(resource_bindings);
 
     Compute *res = PyObject_New(Compute, self->module_state->Compute_type);
-    // Initialization
-    // If you're having trouble with free threading, this is likely the culprit. For you and future me, comment this out.
-    // --- DANGER ZONE ---
-    // res->gc_prev = self->gc_prev; // too dangerous either way
-    // res->gc_next = (GCHeader *)self;
-    // res->gc_prev->gc_next = (GCHeader *)res;
-    // res->gc_next->gc_prev = (GCHeader *)res;
-    // ---UNSAFE MANUAL GARBAGE COLLECTOR---
 
     // Core members
     res->ctx = self;
@@ -3457,163 +3423,82 @@ static void release_vertex_array(Context *self, GLObject *vertex_array)
     }
 }
 
-static void release_gc_object(GCHeader *obj)
-{
-    obj->gc_prev->gc_next = obj->gc_next;
-    obj->gc_next->gc_prev = obj->gc_prev;
-    obj->gc_next = NULL;
-    obj->gc_prev = NULL;
-}
-
 static PyObject *Context_meth_release(Context *self, PyObject *arg)
 {
-    if (Py_TYPE(arg) == self->module_state->Buffer_type)
-    {
+    // Check if it's a Buffer
+    if (Py_TYPE(arg) == self->module_state->Buffer_type) {
         Buffer *buffer = (Buffer *)arg;
-        if (buffer->gc_prev)
-        {
-            release_gc_object((GCHeader *)buffer);
+        Py_XDECREF(buffer->memoryview);
+        buffer->memoryview = NULL;
 
-            Py_XDECREF(buffer->memoryview);
-            buffer->memoryview = NULL;
-
-            buffer->mapped_ptr = NULL;
-            buffer->is_persistently_mapped = 0;
-
-            if (!self->is_lost && buffer->buffer) {
-                glDeleteBuffers(1, &buffer->buffer);
-            }
+        if (!self->is_lost && buffer->buffer) {
+            glDeleteBuffers(1, &buffer->buffer);
             buffer->buffer = 0;
-
-            Py_DECREF(buffer);
         }
     }
     else if (Py_TYPE(arg) == self->module_state->Image_type)
     {
         Image *image = (Image *)arg;
-        if (image->gc_prev)
-        {
-            release_gc_object((GCHeader *)image);
-            if (image->faces)
-            {
-                PyObject *key = NULL;
-                PyObject *value = NULL;
-                Py_ssize_t pos = 0;
-                while (PyDict_Next(image->faces, &pos, &key, &value))
-                {
-                    ImageFace *face = (ImageFace *)value;
-                    release_framebuffer(self, face->framebuffer);
-                }
-                PyDict_Clear(image->faces);
+        if (image->faces) {
+            // faces is a dict, clearing it triggers face deallocators
+            PyDict_Clear(image->faces);
+        }
+
+        if (!self->is_lost && image->image) {
+            if (image->renderbuffer) {
+                glDeleteRenderbuffers(1, &image->image);
+            } else {
+                glDeleteTextures(1, &image->image);
             }
-            if (!self->is_lost)
-            {
-                if (image->renderbuffer)
-                {
-                    glDeleteRenderbuffers(1, &image->image);
-                }
-                else
-                {
-                    glDeleteTextures(1, &image->image);
-                }
-            }
-            Py_DECREF(image);
+            image->image = 0;
         }
     }
     else if (Py_TYPE(arg) == self->module_state->Pipeline_type)
     {
         Pipeline *pipeline = (Pipeline *)arg;
-        if (pipeline->gc_prev)
-        {
-            release_gc_object((GCHeader *)pipeline);
-            release_descriptor_set(self, pipeline->descriptor_set);
-            release_global_settings(self, pipeline->global_settings);
-            release_framebuffer(self, pipeline->framebuffer);
-            release_program(self, pipeline->program);
-            release_vertex_array(self, pipeline->vertex_array);
-            if (pipeline->uniforms)
-            {
-                PyBuffer_Release(&pipeline->uniform_layout_buffer);
-                PyBuffer_Release(&pipeline->uniform_data_buffer);
-            }
-            PyBuffer_Release(&pipeline->viewport_data_buffer);
-            PyBuffer_Release(&pipeline->render_data_buffer);
-            Py_DECREF(pipeline);
+        
+        // Clean up GL objects via the context-aware helpers
+        release_descriptor_set(self, pipeline->descriptor_set);
+        release_global_settings(self, pipeline->global_settings);
+        release_framebuffer(self, pipeline->framebuffer);
+        release_program(self, pipeline->program);
+        release_vertex_array(self, pipeline->vertex_array);
+
+        // Clean up Python buffer references
+        if (pipeline->uniforms) {
+            PyBuffer_Release(&pipeline->uniform_layout_buffer);
+            PyBuffer_Release(&pipeline->uniform_data_buffer);
         }
+        PyBuffer_Release(&pipeline->viewport_data_buffer);
+        PyBuffer_Release(&pipeline->render_data_buffer);
     }
     else if (Py_TYPE(arg) == self->module_state->Compute_type)
     {
         Compute *compute = (Compute *)arg;
-        if (compute->gc_prev)
-        {
-            release_gc_object((GCHeader *)compute);
-            release_descriptor_set(self, compute->descriptor_set);
-            release_program(self, compute->program);
-            if (compute->uniforms)
-            {
-                PyBuffer_Release(&compute->uniform_layout_buffer);
-                PyBuffer_Release(&compute->uniform_data_buffer);
-            }
-            Py_DECREF(compute);
+        release_descriptor_set(self, compute->descriptor_set);
+        release_program(self, compute->program);
+        if (compute->uniforms) {
+            PyBuffer_Release(&compute->uniform_layout_buffer);
+            PyBuffer_Release(&compute->uniform_data_buffer);
         }
     }
     else if (PyUnicode_CheckExact(arg) && !PyUnicode_CompareWithASCIIString(arg, "shader_cache"))
     {
-        PyObject *key = NULL;
-        PyObject *value = NULL;
+        PyObject *key, *value;
         Py_ssize_t pos = 0;
-        while (PyDict_Next(self->shader_cache, &pos, &key, &value))
-        {
+        while (PyDict_Next(self->shader_cache, &pos, &key, &value)) {
             GLObject *shader = (GLObject *)value;
-            if (!self->is_lost)
-            {
-                glDeleteShader(shader->obj);
-            }
+            if (!self->is_lost) glDeleteShader(shader->obj);
         }
         PyDict_Clear(self->shader_cache);
     }
     else if (PyUnicode_CheckExact(arg) && !PyUnicode_CompareWithASCIIString(arg, "all"))
     {
-        GCHeader *it = self->gc_next;
-        while (it != (GCHeader *)self)
-        {
-            GCHeader *next = it->gc_next;
-            if (Py_TYPE((PyObject *)it) == self->module_state->Pipeline_type)
-            {
-                Context_meth_release(self, (PyObject *)it);
-            }
-            it = next;
-        }
-        it = self->gc_next;
-        while (it != (GCHeader *)self)
-        {
-            GCHeader *next = it->gc_next;
-            if (Py_TYPE((PyObject *)it) == self->module_state->Buffer_type)
-            {
-                Context_meth_release(self, (PyObject *)it);
-            }
-            else if (Py_TYPE((PyObject *)it) == self->module_state->Image_type)
-            {
-                Context_meth_release(self, (PyObject *)it);
-            }
-            it = next;
-        }
+        PyGC_Collect();
     }
     Py_RETURN_NONE;
 }
 
-static PyObject *Context_meth_gc(Context *self, PyObject *arg)
-{
-    PyObject *res = PyList_New(0);
-    GCHeader *it = self->gc_next;
-    while (it != (GCHeader *)self)
-    {
-        GCHeader *next = it->gc_next;
-        PyList_Append(res, (PyObject *)it);
-        it = next;
-    }
-    return res;
-}
 
 static PyObject *Context_get_screen(Context *self, void *closure)
 {
@@ -4704,7 +4589,19 @@ static void Context_dealloc(Context *self)
 
 static void Buffer_dealloc(Buffer *self)
 {
-    PyObject_Del(self);
+    Py_XDECREF(self->memoryview);
+
+    if (self->mapped_ptr) {
+        glBindBuffer(self->target, self->buffer);
+        glUnmapBuffer(self->target);
+        self->mapped_ptr = NULL;
+    }
+
+    if (self->buffer) {
+        glDeleteBuffers(1, &self->buffer);
+    }
+
+    Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
 static void Image_dealloc(Image *self)
@@ -4789,7 +4686,6 @@ static PyMethodDef Context_methods[] = {
     {"new_frame", (PyCFunction)Context_meth_new_frame, METH_VARARGS | METH_KEYWORDS, NULL},
     {"end_frame", (PyCFunction)Context_meth_end_frame, METH_VARARGS | METH_KEYWORDS, NULL},
     {"release", (PyCFunction)Context_meth_release, METH_O, NULL},
-    {"gc", (PyCFunction)Context_meth_gc, METH_NOARGS, NULL},
     {0},
 };
 
