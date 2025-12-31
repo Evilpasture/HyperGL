@@ -1,0 +1,37 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "cppbuild",
+            "label": "Build HyperGL to Folder",
+            "command": "cl.exe",
+            "args": [
+                "/Zi",
+                "/EHsc",
+                "/nologo",
+                "/O2", // Optimization for your 10M particles
+                "/LD", // Build a DLL (.pyd)
+                "/IC:\\Users\\PC\\AppData\\Local\\Python\\pythoncore-3.14t-64\\include",
+                
+                // Object file location (the trailing backslash is important)
+                "/Fo${fileDirname}\\build\\", 
+                
+                // Final output file location
+                "/Fe${fileDirname}\\build\\hypergl.pyd", 
+                
+                "${file}",
+                
+                "/link",
+                "/LIBPATH:C:\\Users\\PC\\AppData\\Local\\Python\\pythoncore-3.14t-64\\libs",
+                "opengl32.lib",
+                "user32.lib",
+                "gdi32.lib"
+            ],
+            "options": {
+                "cwd": "${fileDirname}"
+            },
+            "problemMatcher": ["$msCompile"],
+            "group": "build"
+        }
+    ]
+}
