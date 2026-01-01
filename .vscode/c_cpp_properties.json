@@ -3,13 +3,14 @@
         {
             "name": "Win32",
             "includePath": [
-                "C:\\Users\\PC\\AppData\\Local\\Python\\pythoncore-3.14t-64\\include",
+                "C:\\Users\\Admin\\AppData\\Local\\Python\\pythoncore-3.14t-64\\include",
                 "${workspaceFolder}/**"
             ],
             "defines": [
                 "_DEBUG",
                 "UNICODE",
-                "_UNICODE"
+                "_UNICODE",
+                "Py_GIL_DISABLED=1"
             ],
             "windowsSdkVersion": "10.0.26100.0",
             "cStandard": "c17",

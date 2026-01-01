@@ -9,26 +9,26 @@
                 "/Zi",
                 "/EHsc",
                 "/nologo",
-                "/O2", // Optimization for your 10M particles
-                "/LD", // Build a DLL (.pyd)
+                "/O2", 
+                "/LD",
+                "/DPy_GIL_DISABLED=1",
+                "/DPy_BUILD_CORE=1",
                 "/IC:\\Users\\PC\\AppData\\Local\\Python\\pythoncore-3.14t-64\\include",
-                
-                // Object file location (the trailing backslash is important)
                 "/Fo${fileDirname}\\build\\", 
-                
-                // Final output file location
                 "/Fe${fileDirname}\\build\\hypergl.pyd", 
-                
                 "${file}",
-                
                 "/link",
                 "/LIBPATH:C:\\Users\\PC\\AppData\\Local\\Python\\pythoncore-3.14t-64\\libs",
+                "python314t.lib",
                 "opengl32.lib",
                 "user32.lib",
                 "gdi32.lib"
             ],
             "options": {
-                "cwd": "${fileDirname}"
+                "cwd": "${fileDirname}",
+                "env": {
+                    "PATH": "C:\\Users\\PC\\AppData\\Local\\Python\\pythoncore-3.14t-64;${env:PATH}"
+                }
             },
             "problemMatcher": ["$msCompile"],
             "group": "build"
