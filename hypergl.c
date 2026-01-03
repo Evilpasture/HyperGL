@@ -538,6 +538,19 @@ typedef Py_ssize_t intptr;
 #define GL_UNPACK_SKIP_ROWS 0x0CF3
 #define GL_UNPACK_IMAGE_HEIGHT 0x806E
 
+#ifndef GLboolean
+typedef unsigned char GLboolean;
+#endif
+
+#ifndef GL_FALSE
+#define GL_FALSE 0
+#endif
+
+#ifndef GL_TRUE
+#define GL_TRUE 1
+#endif
+
+
 #ifndef GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT
     #define GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT 0x00000001
 #endif
@@ -3457,26 +3470,30 @@ static PyObject * Buffer_meth_map(Buffer *self, PyObject * args) {
 }
 
 static PyObject * Buffer_meth_unmap(Buffer *self, PyObject *args) {
-    // 1. Quick exit if nothing to do
+    // Quick exit if nothing to do
     if (!self->mapped_ptr) {
         Py_RETURN_NONE; 
     }
 
-    // 2. Lock the context state!
     PyMutex_Lock(&self->ctx->state_lock);
 
+    // Safety Check:
+    // Refcount should be 1 (held by self->memoryview). 
+    // If > 1, the user has assigned it to a variable (e.g. m = buf.map()).
+    if (self->memoryview && Py_REFCNT(self->memoryview) > 1) {
+        PyErr_SetString(PyExc_BufferError, "Cannot unmap buffer while memoryview is in use");
+        return NULL;
+    }
+
     glBindBuffer(self->target, self->buffer);
-    glUnmapBuffer(self->target);
+    GLboolean ok = glUnmapBuffer(self->target);
     self->mapped_ptr = NULL;
 
-    // 3. Safety Check: If memoryview exists, we must "release" it.
-    // In 3.14t, it's better to invalidate the memoryview than just check refcounts.
-    if (self->memoryview) {
-        PyObject *tmp = self->memoryview;
-        self->memoryview = NULL; 
-        // We don't need to manually null the base if we DECREF correctly
-        // The memoryview's internal release_buffer will handle it.
-        Py_DECREF(tmp); 
+    if (ok != GL_TRUE) {
+        PyErr_SetString(PyExc_RuntimeError,
+            "glUnmapBuffer failed; buffer contents are undefined");
+        PyMutex_Unlock(&self->ctx->state_lock);
+        return NULL;
     }
     self->is_persistently_mapped = 0;
 
@@ -4109,22 +4126,39 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
     if (viewport_data == Py_None)
     {
         viewport_data = PyMemoryView_FromMemory((char *)&res->viewport, sizeof(res->viewport), PyBUF_WRITE);
+    } else {
+        Py_INCREF(viewport_data);
     }
+
 
     if (render_data == Py_None)
     {
         render_data = PyMemoryView_FromMemory((char *)&res->params, sizeof(res->params), PyBUF_WRITE);
+    } else {
+        Py_INCREF(render_data);
+    }
+
+    if (uniforms)
+    {
+        if (PyObject_GetBuffer(uniform_layout, &res->uniform_layout_buffer, PyBUF_SIMPLE) < 0) {
+            Py_DECREF(res);
+            return NULL;
+        }
+        if (PyObject_GetBuffer(uniform_data, &res->uniform_data_buffer, PyBUF_SIMPLE) < 0) {
+            // Clean up the one we just acquired!
+            PyBuffer_Release(&res->uniform_layout_buffer); 
+            Py_DECREF(res);
+            return NULL;
+        }
+    } else {
+        if (uniform_data != Py_None) {
+            Py_INCREF(uniform_data);
+        }
     }
 
     if (uniform_data == Py_None)
     {
         uniform_data = NULL;
-    }
-
-    if (uniforms)
-    {
-        PyObject_GetBuffer(uniform_layout, &res->uniform_layout_buffer, PyBUF_SIMPLE);
-        PyObject_GetBuffer(uniform_data, &res->uniform_data_buffer, PyBUF_SIMPLE);
     }
 
     PyObject_GetBuffer(viewport_data, &res->viewport_data_buffer, PyBUF_SIMPLE);
@@ -5644,6 +5678,7 @@ static void Pipeline_dealloc(Pipeline *self)
 {
     Py_DECREF(self->descriptor_set);
     Py_DECREF(self->global_settings);
+    Py_XDECREF(self->create_kwargs);
     Py_DECREF(self->framebuffer);
     Py_DECREF(self->vertex_array);
     Py_DECREF(self->program);
