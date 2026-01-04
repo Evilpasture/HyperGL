@@ -2840,19 +2840,24 @@ static int get_limit(int pname, int min, int max)
 static PyObject *meth_cleanup(PyObject *self, PyObject *args)
 {
     ModuleState *module_state = (ModuleState *)PyModule_GetState(self);
-    if (module_state->default_context != Py_None)
+    Context *ctx = (Context *)module_state->default_context;
+
+    if (ctx != (Context *)Py_None && !ctx->is_lost)
     {
-        Py_DECREF(PyObject_CallMethod(module_state->default_context, "release", "(s)", "shader_cache"));
-        Py_DECREF(PyObject_CallMethod(module_state->default_context, "release", "(s)", "all"));
-        Context *ctx = (Context *)module_state->default_context;
+        Py_XDECREF(PyObject_CallMethod(ctx, "release", "s", "shader_cache"));
+        Py_XDECREF(PyObject_CallMethod(ctx, "release", "s", "all"));
         ctx->is_lost = 1;
     }
-    Py_DECREF(module_state->default_context);
-    module_state->default_context = new_ref(Py_None);
-    Py_DECREF(module_state->default_loader);
-    module_state->default_loader = new_ref(Py_None);
+
+    Py_CLEAR(module_state->default_context);
+    module_state->default_context = Py_NewRef(Py_None);
+
+    Py_CLEAR(module_state->default_loader);
+    module_state->default_loader = Py_NewRef(Py_None);
+
     Py_RETURN_NONE;
 }
+
 
 // helper to safely decref a list of objects while unlocking
 static void safe_decref_list(Context *self, PyObject **list, int count, int is_locked) {
