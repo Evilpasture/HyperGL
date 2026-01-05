@@ -9,17 +9,18 @@
 #define MAX_BUFFER_BINDINGS 8
 #define MAX_SAMPLER_BINDINGS 16
 
-#define GC_TRACK_DEBUG(op, tag) do { \
-    if (PyObject_GC_IsTracked(op)) { \
-        fprintf(stderr, \
-            "GC DOUBLE-TRACK IGNORED: %s at %s:%d obj=%p type=%s\n", \
-            tag, __FILE__, __LINE__, \
-            (void *)(op), Py_TYPE(op)->tp_name); \
-        fflush(stderr); \
-    } else { \
-        PyObject_GC_Track(op); \
-    } \
-} while (0)
+// uncomment if you need this.
+// #define GC_TRACK_DEBUG(op, tag) do { \
+//     if (PyObject_GC_IsTracked(op)) { \
+//         fprintf(stderr, \
+//             "GC DOUBLE-TRACK IGNORED: %s at %s:%d obj=%p type=%s\n", \
+//             tag, __FILE__, __LINE__, \
+//             (void *)(op), Py_TYPE(op)->tp_name); \
+//         fflush(stderr); \
+//     } else { \
+//         PyObject_GC_Track(op); \
+//     } \
+// } while (0)
 
 // --- Struct Definitions ---
 
@@ -1596,7 +1597,7 @@ static GLObject *build_framebuffer(Context *self, PyObject *attachments) // HAS 
     // Use init helper to link SharedTrash
     gl_object_init(self, res, framebuffer, TRASH_FRAMEBUFFER);
 
-    GC_TRACK_DEBUG(res, "GLObject"); 
+    PyObject_GC_Track(res); 
 
     PyObject *existing = NULL;
     int set_status = PyDict_SetDefaultRef(self->framebuffer_cache, attachments, (PyObject *)res, &existing);
@@ -1700,7 +1701,7 @@ static GLObject *build_vertex_array(Context *self, PyObject *bindings) // HAS GC
     // Init with SharedTrash logic
     gl_object_init(self, res, vertex_array, TRASH_VERTEX_ARRAY);
 
-    GC_TRACK_DEBUG(res, "GLObject");
+    PyObject_GC_Track(res);
 
     PyObject *existing = NULL;
     int set_status = PyDict_SetDefaultRef(self->vertex_array_cache, bindings, (PyObject *)res, &existing);
@@ -1780,7 +1781,7 @@ static GLObject *build_sampler(Context *self, PyObject *params) // HAS GC_TRACK
     
     gl_object_init(self, res, sampler, TRASH_SAMPLER);
 
-    GC_TRACK_DEBUG(res, "GLObject");
+    PyObject_GC_Track(res);
 
     PyObject *existing = NULL;
     int set_status = PyDict_SetDefaultRef(self->sampler_cache, params, (PyObject *)res, &existing);
