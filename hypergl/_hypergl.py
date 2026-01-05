@@ -7,8 +7,13 @@ import re
 import textwrap
 import os
 import atexit
+import pathlib
 
-__version__ = '1.0.0'
+version_file = pathlib.Path(__file__).parent / "VERSION"
+try:
+    __version__ = version_file.read_text().strip()
+except FileNotFoundError:
+    __version__ = "0.0.0"  # fallback
 
 VERTEX_FORMAT = {
     'uint8x2': (0x1401, 2, 0, 1),
