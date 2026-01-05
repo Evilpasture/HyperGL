@@ -545,8 +545,10 @@ typedef Py_ssize_t intptr;
 #define GL_MAP_WRITE_BIT 0x0002
 #define GL_MAP_PERSISTENT_BIT 0x0040
 #define GL_MAP_COHERENT_BIT 0x0080
-#define GL_CLIENT_STORAGE_BIT 0x0100
+#define GL_DYNAMIC_STORAGE_BIT 0x0100
+#define GL_CLIENT_STORAGE_BIT 0x0200
 #define GL_PERSISTENT_WRITE_FLAGS (GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT)
+#define GL_STORAGE_FLAGS (GL_PERSISTENT_WRITE_FLAGS | GL_DYNAMIC_STORAGE_BIT | GL_CLIENT_STORAGE_BIT)
 #define GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS 0x90DE
 #define GL_ACTIVE_ATTRIBUTE_MAX_LENGTH  0x8B8A
 #define GL_ACTIVE_UNIFORM_MAX_LENGTH    0x8B87
@@ -559,7 +561,6 @@ typedef Py_ssize_t intptr;
 #define GL_UNPACK_SKIP_PIXELS 0x0CF4
 #define GL_UNPACK_SKIP_ROWS 0x0CF3
 #define GL_UNPACK_IMAGE_HEIGHT 0x806E
-// B-specific additions
 #define GL_UNIFORM                                 0x92E1
 #define GL_UNIFORM_BLOCK                           0x92E2
 #define GL_PROGRAM_INPUT                           0x92E3
@@ -570,6 +571,10 @@ typedef Py_ssize_t intptr;
 #define GL_ARRAY_SIZE         0x92FB
 #define GL_NAME_LENGTH        0x92F9
 #define GL_BUFFER_DATA_SIZE    0x9303
+#define GL_BUFFER_SIZE 0x8764
+#define GL_BUFFER_IMMUTABLE_STORAGE  0x821F
+
+
 
 #ifndef GLboolean
 typedef unsigned char GLboolean;
@@ -722,10 +727,10 @@ RESOLVE(void, glBindBufferBase, int, int, int);
 RESOLVE(void *, glMapBufferRange, int, intptr, intptr, int);
 RESOLVE(int, glUnmapBuffer, int);
 RESOLVE(void, glPixelStorei, int, int);
-// New from B
 RESOLVE(void, glGetProgramInterfaceiv, int, int, int, int *);
 RESOLVE(void, glGetProgramResourceiv, int, int, int, int, const int *, int, int *, int *);
 RESOLVE(void, glGetProgramResourceName, int, int, int, int, int *, char *);
+RESOLVE(void, glGetBufferParameteriv, unsigned int, unsigned int, int *);
 
 #ifndef EXTERN_GL
 
@@ -885,6 +890,7 @@ static int load_gl(PyObject *loader)
     load(glGetProgramInterfaceiv);
     load(glGetProgramResourceiv);
     load(glGetProgramResourceName);
+    load(glGetBufferParameteriv)
 
 #undef load
 #undef check
@@ -1728,7 +1734,7 @@ static GLObject *build_vertex_array(Context *self, PyObject *bindings) // HAS GC
     return res;
 }
 
-static GLObject *build_sampler(Context *self, PyObject *params) // HAS GC_TRACK
+static GLObject *build_sampler(Context *self, PyObject *params)
 {
     PyObject *cache_obj = NULL;
     int found = PyDict_GetItemRef(self->sampler_cache, params, &cache_obj);
@@ -3639,9 +3645,9 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args, PyObject *kwar
     {
         glGenBuffers(1, (unsigned int *)&buffer);
         glBindBuffer(target, buffer);
-        
+        // SSBO
         if (target == GL_SHADER_STORAGE_BUFFER) { 
-            glBufferStorage(target, size, initial_data_ptr, GL_PERSISTENT_WRITE_FLAGS | GL_CLIENT_STORAGE_BIT);
+            glBufferStorage(target, size, initial_data_ptr, GL_PERSISTENT_WRITE_FLAGS | GL_DYNAMIC_STORAGE_BIT | GL_CLIENT_STORAGE_BIT); // 0x0002 | 0x0040 | 0x0080 | 0x0100 | 0x0200
         } else {
             glBufferData(target, size, initial_data_ptr, access);
         }
@@ -3742,16 +3748,32 @@ static PyObject * Buffer_meth_map(Buffer *self, PyObject * args) {
              "SSBO size (%d) must be 16-byte aligned", self->size);
 
     if (!self->mapped_ptr) {
+        PyMutex_Lock(&self->ctx->state_lock);
+
         glBindBuffer(self->target, self->buffer);
-        // Coherent flag is vital for 3.14t to avoid manual glMemoryBarrier
-        self->mapped_ptr = glMapBufferRange(self->target, 0, self->size, 
-            GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
+
+        // int actual_size = 0;
+        // glGetBufferParameteriv(self->target, GL_BUFFER_SIZE, &actual_size);
+        // printf("[HyperGL] Buffer ID: %d | Target: 0x%X | Expected Size: %d | Actual Size: %d\n", 
+        //        self->buffer, self->target, self->size, actual_size);
+
+        // int storage_flags = 0;
+        // glGetBufferParameteriv(self->target, GL_BUFFER_IMMUTABLE_STORAGE, &storage_flags);
+        // printf("[HyperGL] Allocation Flags: 0x%X | Mapping Flags: 0x%X\n", 
+        //        storage_flags, GL_PERSISTENT_WRITE_FLAGS);
+
+        self->mapped_ptr = glMapBufferRange(self->target, 0, self->size, GL_PERSISTENT_WRITE_FLAGS);
         
         if (!self->mapped_ptr) {
-            PyErr_SetString(PyExc_RuntimeError, "glMapBufferRange failed");
+            GLenum err = glGetError();
+            printf("[HyperGL] glMapBufferRange FAILED. GL_ERROR: 0x%X\n", err);
+            PyMutex_Unlock(&self->ctx->state_lock);
+            PyErr_Format(PyExc_RuntimeError, "glMapBufferRange failed (GL_ERR: 0x%X). See console.", err);
             return NULL;
         }
+        
         self->is_persistently_mapped = 1;
+        PyMutex_Unlock(&self->ctx->state_lock);
     }
 
     Py_buffer view;
@@ -3764,43 +3786,41 @@ static PyObject * Buffer_meth_map(Buffer *self, PyObject * args) {
         return NULL;
     }
     
-    self->memoryview = mv; 
+    self->memoryview = mv;
     // Buffer_getbuffer INCREF'd self, FromBuffer created mv.
     // self->memoryview holds a strong ref to the view.
     // We return a New Ref to the caller.
-    return Py_XNewRef(self->memoryview);
+    return Py_XNewRef(self->memoryview); // Caching this might cause a reference cycle.
 }
 
 static PyObject * Buffer_meth_unmap(Buffer *self, PyObject *args) {
-    // Quick exit if nothing to do
     if (!self->mapped_ptr) {
         Py_RETURN_NONE; 
     }
 
+    // If it's persistent, unmapping is usually an error in logic 
+    // unless we are destroying the buffer.
+    if (self->is_persistently_mapped) {
+        // For Persistent buffers, we only unmap during dealloc/garbage collection
+        // But if the user explicitly calls .unmap(), we allow it but clear the view.
+    }
+
     PyMutex_Lock(&self->ctx->state_lock);
 
-    // Safety Check:
-    // Refcount should be 1 (held by self->memoryview). 
-    // If > 1, the user has assigned it to a variable (e.g. m = buf.map()).
+    // If the Python user still has a handle (e.g., 'm = buf.map()'), 
+    // unmapping is a recipe for a Segfault in the physics thread.
     if (self->memoryview && Py_REFCNT(self->memoryview) > 1) {
-        PyErr_SetString(PyExc_BufferError, "Cannot unmap buffer while memoryview is in use");
         PyMutex_Unlock(&self->ctx->state_lock);
+        PyErr_SetString(PyExc_BufferError, "Cannot unmap; physics thread or user still holds the memoryview");
         return NULL;
     }
 
     glBindBuffer(self->target, self->buffer);
-    GLboolean ok = glUnmapBuffer(self->target);
+    glUnmapBuffer(self->target);
     self->mapped_ptr = NULL;
-
-    if (ok != GL_TRUE) {
-        PyErr_SetString(PyExc_RuntimeError,
-            "glUnmapBuffer failed; buffer contents are undefined");
-        PyMutex_Unlock(&self->ctx->state_lock);
-        return NULL;
-    }
     self->is_persistently_mapped = 0;
     
-    // Clear the memoryview reference since it is no longer valid
+    // Clear the view so it can't be used again
     Py_CLEAR(self->memoryview);
 
     PyMutex_Unlock(&self->ctx->state_lock);
@@ -5749,24 +5769,48 @@ static void Context_dealloc(Context *self)
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
+static int Buffer_traverse(Buffer *self, visitproc visit, void *arg) {
+    Py_VISIT(self->memoryview);
+    Py_VISIT(self->ctx); 
+    return 0;
+}
+
+static int Buffer_clear(Buffer *self) {
+    // Use XSETREF or XDECREF + NULL to ensure idempotency
+    Py_XSETREF(self->memoryview, NULL);
+    Py_XSETREF(self->ctx, NULL); 
+    return 0;
+}
+
 static void Buffer_dealloc(Buffer *self)
 {
-    Py_XDECREF(self->memoryview);
+    // 1. STOP THE GC
+    PyObject_GC_UnTrack(self);
 
-    // Enqueue for deletion if context is alive
-    Context *ctx = self->ctx;
-    if (ctx && self->buffer && !ctx->is_lost) {
-        // Safe to access trash_shared because ctx is kept alive by reference?
-        // Note: Buffer doesn't own a strong ref to Context in standard implementation to avoid cycles,
-        // but here struct definition says `Context *ctx`. Assuming borrowed or weak logic.
-        // Actually, if Buffer doesn't own Context, accessing ctx->trash_shared is risky if Context died first.
-        // However, standard GL binding implies resources die with context. 
-        // GLObject holds a `trash` pointer directly. Buffer is a wrapper.
-        // We will assume Context is valid or check carefully.
-        if (ctx->trash_shared) {
-            enqueue_trash(ctx->trash_shared, self->buffer, TRASH_BUFFER);
+    // 2. USE THE DATA WHILE WE STILL HAVE IT
+    // We need 'ctx' and 'buffer' ID to clean up the GPU side.
+    if (self->ctx && !self->ctx->is_lost) {
+        
+        // A. Handle Unmapping (Must happen before deletion)
+        if (self->mapped_ptr) {
+            PyMutex_Lock(&self->ctx->state_lock);
+            glBindBuffer(self->target, self->buffer);
+            glUnmapBuffer(self->target);
+            self->mapped_ptr = NULL;
+            PyMutex_Unlock(&self->ctx->state_lock);
+        }
+
+        // B. Enqueue for the "Double Flush" Trash System
+        if (self->buffer && self->ctx->trash_shared) {
+            enqueue_trash(self->ctx->trash_shared, self->buffer, TRASH_BUFFER);
         }
     }
+
+    // 3. NOW BREAK THE PYTHON CYCLES
+    // This sets self->memoryview and self->ctx to NULL.
+    Buffer_clear(self);
+
+    // 4. FREE THE C STRUCT
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
@@ -5996,6 +6040,8 @@ static PyType_Slot Buffer_slots[] = {
     {Py_tp_members, Buffer_members},
     {Py_bf_getbuffer, (void*)Buffer_getbuffer},
     {Py_tp_dealloc, (void *)Buffer_dealloc},
+    {Py_tp_traverse, (void *)Buffer_traverse},
+    {Py_tp_clear, (void *)Buffer_clear},
     {0},
 };
 
@@ -6060,7 +6106,7 @@ static PyType_Slot GLObject_slots[] = {
 };
 
 static PyType_Spec Context_spec = {"hypergl.Context", sizeof(Context), 0, Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, Context_slots};
-static PyType_Spec Buffer_spec = {"hypergl.Buffer", sizeof(Buffer), 0, Py_TPFLAGS_DEFAULT, Buffer_slots};
+static PyType_Spec Buffer_spec = {"hypergl.Buffer", sizeof(Buffer), 0, Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, Buffer_slots};
 static PyType_Spec Image_spec = {"hypergl.Image", sizeof(Image), 0, Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_GC, Image_slots}; // Py_TPFLAGS_BASETYPE: Subclassing
 static PyType_Spec Pipeline_spec = {"hypergl.Pipeline", sizeof(Pipeline), 0, Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, Pipeline_slots};
 static PyType_Spec Compute_spec = {"hypergl.Compute", sizeof(Compute), 0, Py_TPFLAGS_DEFAULT, Compute_slots};
