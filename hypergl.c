@@ -21,7 +21,7 @@
     } \
 } while (0)
 
-// --- Struct Definitions (Architecture B with Logic A requirements) ---
+// --- Struct Definitions ---
 
 typedef struct VertexFormat
 {
@@ -153,7 +153,7 @@ typedef struct {
     int type; // 0=texture, 1=buffer, 2=framebuffer, etc.
 } TrashItem;
 
-// New architecture: Shared trash bin for thread-safe destruction
+// Shared trash bin for thread-safe destruction
 typedef struct SharedTrash {
     PyMutex lock;
     TrashItem *bin;
@@ -3389,7 +3389,7 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args, PyObject *kwarg
     res->includes = NULL;
     res->framebuffer_cache = NULL;
 
-    // --- Architecture B: Shared Trash Allocation ---
+    // --- Shared Trash Allocation ---
     SharedTrash *shared = PyMem_Malloc(sizeof(SharedTrash));
     if (!shared) {
         Py_DECREF(res);
@@ -5271,7 +5271,7 @@ static PyObject *Context_meth_new_frame(Context *self, PyObject *args, PyObject 
         return NULL;
     }
 
-    // Architecture B: Process deletion queue outside of lock
+    // Process deletion queue outside of lock
     flush_trash(self);
 
     PyMutex_Lock(&self->state_lock);
@@ -5394,8 +5394,8 @@ static PyObject *Context_meth_end_frame(Context *self, PyObject *args, PyObject 
 
 static PyObject *Context_meth_release(Context *self, PyObject *arg)
 {
-    // Uses Architecture B's enqueue_trash logic where applicable, 
-    // or helper functions defined in segment 2.
+    // Uses enqueue_trash logic where applicable, 
+    // or helper functions defined in the codebase.
 
     if (Py_TYPE(arg) == self->module_state->Buffer_type) {
         Buffer *buffer = (Buffer *)arg;
@@ -5716,7 +5716,7 @@ static PyObject *meth_camera(PyObject *self, PyObject *args, PyObject *kwargs)
     return PyBytes_FromStringAndSize((char *)res, 64);
 }
 
-// --- Deallocators (Architecture B: SharedTrash Integration) ---
+// --- Deallocators ---
 
 static void Context_dealloc(Context *self)
 {
@@ -5757,7 +5757,7 @@ static void Buffer_dealloc(Buffer *self)
         // but here struct definition says `Context *ctx`. Assuming borrowed or weak logic.
         // Actually, if Buffer doesn't own Context, accessing ctx->trash_shared is risky if Context died first.
         // However, standard GL binding implies resources die with context. 
-        // Architecture B's GLObject holds a `trash` pointer directly. Buffer is a wrapper.
+        // GLObject holds a `trash` pointer directly. Buffer is a wrapper.
         // We will assume Context is valid or check carefully.
         if (ctx->trash_shared) {
             enqueue_trash(ctx->trash_shared, self->buffer, TRASH_BUFFER);
@@ -5846,7 +5846,7 @@ static void GLObject_dealloc(GLObject *self)
     if (PyObject_GC_IsTracked((PyObject *)self))
         PyObject_GC_UnTrack(self);
 
-    // Architecture B: Use SharedTrash
+    // Use SharedTrash
     if (Atomic_Decrement(&self->uses) == 0 && self->trash) {
         enqueue_trash(self->trash, self->obj, self->type);
     }
