@@ -9,7 +9,7 @@ import hypergl
 from numba import njit, prange
 
 # --- 1. CONFIGURATION ---
-PARTICLE_COUNT = 10_000_000  # The heavy load
+PARTICLE_COUNT = 10000000  # The heavy load
 WORKGROUP_SIZE = 256  # GPU Local size
 DT = 0.005  # Fixed physics timestep
 
@@ -17,58 +17,43 @@ DT = 0.005  # Fixed physics timestep
 # --- 2. THE NUMBA KERNEL (CPU SIMD) ---
 # nogil=True releases the lock (critical even in 3.14t for Numba internal threading)
 # fastmath=True enables AVX2/AVX-512 instructions
-@njit(parallel=True, fastmath=True, nogil=True, cache=True)
-def cpu_physics_kernel(data, t):
-    # 'data' is a flattened float32 view of (N, 4)
-    # 0=x, 1=y, 2=vx, 3=vy
-
-    # Precompute wave constants
-    freq = 0.005
-    amp = 10.0
-    phase = t * 2.0
-
-    # Parallel loop over particles
-    for i in prange(data.shape[0]):
-        # We read Y (index 1), modify VX (index 2)
-        # This creates the "Wind" effect without touching the GPU's gravity logic
-        py = data[i, 1]
-
-        # Branchless drift calculation
-        drift = np.sin(py * freq + phase) * amp
-
-        # Direct write
-        data[i, 2] += drift
+# Pre-calculate once
+sin_lut = np.sin(np.linspace(0, 2*np.pi, 4096)).astype(np.float32)
 
 
-# --- 3. THE WORKER THREAD ---
-def worker_loop(ctx_buffer, numpy_array, count):
-    """
-    Runs in a background thread.
-    In Python 3.14t, this runs purely in parallel with the main loop.
-    """
-    print(f" [Worker] Physics Thread Active | PID: {threading.get_native_id()}")
+@njit(parallel=True, fastmath=True, nogil=True)
+def cpu_physics_kernel(data, t, sin_lut):
+    n = data.shape[0]
+    freq = np.float32(0.005)
+    phase = np.float32(t * 2.0)
+    # Scaling factor to map (y * freq + phase) to 0-4095
+    # (4096 / (2 * pi)) approx 651.8986
+    lut_scale = np.float32(651.8986)
 
-    while not glfw.window_should_close(window):
+    for i in prange(n):
+        # Calculate index using bitwise AND for speed (only works if LUT size is power of 2)
+        angle = data[i, 1] * freq + phase
+        idx = int(angle * lut_scale) & 4095
+
+        data[i, 2] += sin_lut[idx] * np.float32(10.0)
+
+
+# --- 3. THE WORKER THREAD (ZERO-GL VERSION) ---
+# WE DON'T map() HERE.
+def worker_loop(gpu_view, sin_lut): # Add sin_lut here
+    print(f" [Worker] Physics Thread Active")
+    while True:
         t = time.perf_counter()
-
-        # 1. Download from GPU (PCIe Read)
-        # Using read(into=...) avoids memory allocation
-        ctx_buffer.read(into=numpy_array)
-
-        # 2. CPU Math (SIMD)
-        view = numpy_array.reshape(count, 4)
-        cpu_physics_kernel(view, t)
-
-        # 3. Upload to GPU (PCIe Write)
-        ctx_buffer.write(numpy_array)
-
-        # Tuning: 0.0s = Max PCIe Saturation.
-        # If rendering stutters, increase to 0.002 to let Draw calls through.
+        try:
+            # Pass it into the Numba kernel
+            cpu_physics_kernel(gpu_view, t, sin_lut)
+        except Exception as e:
+            print(f"Worker Error: {e}")
+            break
         time.sleep(0.001)
 
-    # --- 4. ENGINE SETUP ---
 
-
+# --- 4. ENGINE SETUP ---
 if not glfw.init(): sys.exit()
 
 glfw.window_hint(glfw.FLOATING, glfw.TRUE)
@@ -98,7 +83,13 @@ pos_vel[:, 3] = np.cos(angle) * 100.0
 
 # GPU Buffer 0: Position & Velocity
 # Usage hint: 'stream_draw' (updated frequently by CPU)
-particle_buffer = ctx.buffer(data=pos_vel.tobytes(), access='stream_draw')
+# Force the target to be an SSBO so map() accepts it
+particle_buffer = ctx.buffer(
+    data=pos_vel.tobytes(),
+    storage=True
+)
+
+m = particle_buffer.map()
 
 # GPU Buffer 1: Mass (Static)
 inv_mass = np.random.uniform(0.1, 1.0, PARTICLE_COUNT).astype('f4')
@@ -108,6 +99,7 @@ mass_buffer = ctx.buffer(data=inv_mass.tobytes(), access='static_read')
 # We use a bytearray for the buffer protocol, then view it as numpy
 cpu_staging = bytearray(PARTICLE_COUNT * 16)
 cpu_view = np.frombuffer(cpu_staging, dtype='f4')
+gpu_view = np.frombuffer(m, dtype='f4').reshape(PARTICLE_COUNT, 4)
 
 # --- 6. SHADERS (OPTIMIZED GLSL) ---
 
@@ -263,7 +255,8 @@ render_pipeline = ctx.pipeline(
 # --- 8. START THREADS ---
 sim_thread = threading.Thread(
     target=worker_loop,
-    args=(particle_buffer, cpu_view, PARTICLE_COUNT),
+    # Pass both the mapped view and the LUT
+    args=(gpu_view, sin_lut),
     daemon=True
 )
 sim_thread.start()
