@@ -7,13 +7,16 @@ import re
 import textwrap
 import os
 import atexit
-import pathlib
 
-version_file = pathlib.Path(__file__).parent / "VERSION"
 try:
-    __version__ = version_file.read_text().strip()
-except FileNotFoundError:
-    __version__ = "0.0.0"  # fallback
+    from importlib.metadata import version, PackageNotFoundError
+    try:
+        __version__ = version("hypergl")
+    except PackageNotFoundError:
+        __version__ = "0.0.0"
+except ImportError:
+    __version__ = "0.0.0"
+
 
 VERTEX_FORMAT = {
     'uint8x2': (0x1401, 2, 0, 1),

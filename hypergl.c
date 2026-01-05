@@ -4,9 +4,10 @@
 
 #include <Python.h>
 #include <structmember.h>
-#include <stdio.h>
-#include <string.h>
 
+#ifndef HYPERGL_VERSION
+#define HYPERGL_VERSION "0.0.0"
+#endif
 #define MAX_ATTACHMENTS 8
 #define MAX_BUFFER_BINDINGS 8
 #define MAX_SAMPLER_BINDINGS 16
@@ -6075,23 +6076,7 @@ static int module_exec(PyObject *self)
     if (!state) return -1;
 
     // --- read VERSION file ---
-    const char *version_path = "VERSION";  // relative to CWD or adjust path
-    char version_buf[64] = {0};
-
-    FILE *f = fopen(version_path, "r");
-    if (f) {
-        if (fgets(version_buf, sizeof(version_buf), f) != NULL) {
-            // strip newline
-            char *nl = strchr(version_buf, '\n');
-            if (nl) *nl = '\0';
-        }
-        fclose(f);
-    } else {
-        strcpy(version_buf, "0.0.0");  // fallback if VERSION missing
-    }
-
-    // --- set __version__ dynamically ---
-    PyModule_AddObject(self, "__version__", PyUnicode_FromString(version_buf));
+    PyModule_AddObject(self, "__version__", PyUnicode_FromString(HYPERGL_VERSION));
 
     memset(&state->global_lock, 0, sizeof(PyMutex));
     memset(&state->setup_lock, 0, sizeof(PyMutex));

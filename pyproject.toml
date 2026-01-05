@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hypergl"
-version = "1.0.0"
-description = "High-performance Free-Threaded Graphics Engine for 10M Particles"
+version = "1.0.0b1"
+description = "High Performance, Modernized OpenGL wrapper"
 readme = "README.md"
 authors = [{name = "Mai Huy Hiếu"}]
 license = "MIT"

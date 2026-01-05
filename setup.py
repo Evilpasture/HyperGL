@@ -3,10 +3,17 @@ import re
 import sys
 import sysconfig
 from setuptools import Extension, setup
+import toml
+
+# Read the version from pyproject.toml
+with open("pyproject.toml", "r") as f:
+    pyproject_data = toml.load(f)
+version = pyproject_data.get("project", {}).get("version", "0.0.0")
 
 
 extra_compile_args = []
 define_macros = [('Py_GIL_DISABLED', '1')]
+define_macros.append(('HYPERGL_VERSION', f'"{version}"'))
 libraries = []
 
 if sys.platform == 'win32':
@@ -45,6 +52,7 @@ ext = Extension(
 
 setup(
     name='hypergl',
+    version=version,
     ext_modules=[ext],
     packages=['hypergl', 'hypergl-stubs'],
     package_data={
