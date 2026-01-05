@@ -5915,9 +5915,10 @@ static PyMethodDef Image_methods[] = {
 };
 
 static PyGetSetDef Image_getset[] = {
-    {"clear_value", (getter)Image_get_clear_value, (setter)Image_set_clear_value, NULL, NULL},
-    {0},
+    {"clear_value", (getter)Image_get_clear_value, (setter)Image_set_clear_value, "The clear value of the image", NULL},
+    {0}
 };
+
 
 static PyMemberDef Image_members[] = {
     {"size", T_OBJECT, offsetof(Image, size), READONLY, NULL},
@@ -6000,7 +6001,8 @@ static PyType_Slot Image_slots[] = {
     {Py_tp_clear, (void *)Image_clear},
     {Py_tp_methods, Image_methods},
     {Py_tp_members, Image_members},
-    {0},
+    {Py_tp_getset, Image_getset},
+    {0}
 };
 
 static PyType_Slot Pipeline_slots[] = {
@@ -6055,7 +6057,7 @@ static PyType_Slot GLObject_slots[] = {
 
 static PyType_Spec Context_spec = {"hypergl.Context", sizeof(Context), 0, Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, Context_slots};
 static PyType_Spec Buffer_spec = {"hypergl.Buffer", sizeof(Buffer), 0, Py_TPFLAGS_DEFAULT, Buffer_slots};
-static PyType_Spec Image_spec = {"hypergl.Image", sizeof(Image), 0, Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, Image_slots};
+static PyType_Spec Image_spec = {"hypergl.Image", sizeof(Image), 0, Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_GC, Image_slots}; // Py_TPFLAGS_BASETYPE: Subclassing
 static PyType_Spec Pipeline_spec = {"hypergl.Pipeline", sizeof(Pipeline), 0, Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, Pipeline_slots};
 static PyType_Spec Compute_spec = {"hypergl.Compute", sizeof(Compute), 0, Py_TPFLAGS_DEFAULT, Compute_slots};
 static PyType_Spec ImageFace_spec = {"hypergl.ImageFace", sizeof(ImageFace), 0, Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, ImageFace_slots};
