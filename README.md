@@ -12,7 +12,9 @@ HyperGL assumes some existing knowledge of OpenGL. It is not for beginners, but 
 
 *   **C-Extension Performance:** Written entirely in C using the CPython API for minimal overhead.
 *   **Object-Oriented Abstraction:** No more global state machine. HyperGL encapsulates state into `Context`, `Pipeline`, `Buffer`, and `Image` objects.
-*   **Pipeline Architecture:** Rendering state (shaders, blending, depth, stencil, culling) is baked into immutable `Pipeline` objects, reducing driver overhead during draw calls.
+*   **Pipeline Architecture:** Rendering state (shaders, blending, depth, stencil, culling) is baked into immutable `Pipeline` objects, reducing driver overhead during draw calls. If you try to do the following: 
+
+*   `pipeline.__dict__` -> `AttributeError: 'hypergl.Pipeline' object has no attribute '__dict__'.`
 *   **Smart Caching:** Internally caches Framebuffers, VAOs, Shader Programs, and Descriptor Sets to prevent redundant object creation and state changes.
 *   **Compute Shader Support:** First-class support for Compute Shaders and SSBOs (Shader Storage Buffer Objects).
 *   **Thread Safety:** Includes internal mutexes and a shared "trash bin" system to safely handle OpenGL resource destruction from Python's Garbage Collector, even across threads.
