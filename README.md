@@ -1,6 +1,6 @@
 # HyperGL
 
-[A fork of ZenGL](https://github.com/szabolcsdombi/zengl)
+[Built upon ZenGL](https://github.com/szabolcsdombi/zengl)
 
 **HyperGL** is a high-performance, Modern OpenGL wrapper for Python, written in C.
 
