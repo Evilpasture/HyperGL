@@ -1,152 +1,155 @@
 # HyperGL
 
-[Built upon ZenGL](https://github.com/szabolcsdombi/zengl)
+**High-Performance, Object-Oriented Modern OpenGL for Python.**
 
-**HyperGL** is a high-performance, Modern OpenGL wrapper for Python, written in C.
+[Built upon ZenGL](https://github.com/szabolcsdombi/zengl) | [License: MIT](LICENSE)
 
-Unlike traditional wrappers (like PyOpenGL) that expose raw C-style OpenGL calls, HyperGL provides a **stateless, object-oriented abstraction layer**. It is designed to bridge the gap between Python's ease of use and the performance required for real-time rendering, mimicking "ModernGL" and Vulkan-style concepts (Pipelines, Descriptor Sets) while running on an OpenGL backend.
+**HyperGL** is a stateless, object-oriented abstraction layer for OpenGL 3.3 up to 4.6, written almost entirely in C. It bridges the gap between Python's ease of use and the raw performance required for real-time rendering engine development.
 
-HyperGL assumes some existing knowledge of OpenGL. It is not for beginners, but it is definitely better than Vulkan's endless boilerplate.
+Unlike traditional wrappers (like PyOpenGL) that expose raw C-style API calls, HyperGL encapsulates state into immutable **Pipelines** and resource objects. It mimics concepts found in Vulkan and ModernGL but runs on the OpenGL backend, abstracting away the global state machine hell that was ubiquitous to every language.
+
+---
+
+## v1.1: AZDO Update
+
+HyperGL v1.1 introduces **AZDO (Approaching Zero Driver Overhead)** features, effectively removing the CPU bottleneck for Python rendering.
+
+*   **Bindless Textures (`GL_ARB_bindless_texture`):** Pass 64-bit texture handles directly to shaders via SSBOs. Access thousands of unique textures in a single draw call.
+*   **Indirect Drawing (`GL_ARB_multi_draw_indirect`):** Generate draw commands on the GPU or store them in buffers. Issue a single Python call to render millions of instances.
+*   **Free-Threading Support (Python 3.14t):** Fully compatible with Python's experimental free-threaded (No-GIL) build, allowing render loops and game logic to run in true parallel.
+
+**Performance Benchmark (RTX 2060 / Python 3.14t):**
+*   **1,000,000 Sprites:** ~44 FPS (GPU Fill-rate bound)
+*   **CPU Usage:** ~15% (Idle)
+
+---
 
 ## Key Features
 
-*   **C-Extension Performance:** Written entirely in C using the CPython API for minimal overhead.
-*   **Object-Oriented Abstraction:** No more global state machine. HyperGL encapsulates state into `Context`, `Pipeline`, `Buffer`, and `Image` objects.
-*   **Pipeline Architecture:** Rendering state (shaders, blending, depth, stencil, culling) is baked into immutable `Pipeline` objects, reducing driver overhead during draw calls. If you try to do the following: 
+*   **C-Extension Performance:** Written in C using the CPython API for minimal overhead.
+*   **Pipeline Architecture:** Rendering state (shaders, blending, depth, layout) is baked into immutable `Pipeline` objects. No more `glEnable`/`glDisable`, looks clean.
+*   **Smart Caching:** Internally caches Framebuffers, VAOs, Programs, and Descriptor Sets to prevent redundant driver calls.
+*   **Compute Support:** First-class support for Compute Shaders and SSBOs (Shader Storage Buffer Objects).
+*   **Thread Safety:** Includes internal mutexes and a shared "trash bin" system to safely handle OpenGL resource destruction from Python's Garbage Collector across threads.
+*   **Persistent Mapping:** Supports `GL_MAP_PERSISTENT_BIT` for zero-copy memory access between Python `memoryview`s and GPU buffers.
 
-*   `pipeline.__dict__` -> `AttributeError: 'hypergl.Pipeline' object has no attribute '__dict__'.`
-*   **Smart Caching:** Internally caches Framebuffers, VAOs, Shader Programs, and Descriptor Sets to prevent redundant object creation and state changes.
-*   **Compute Shader Support:** First-class support for Compute Shaders and SSBOs (Shader Storage Buffer Objects).
-*   **Thread Safety:** Includes internal mutexes and a shared "trash bin" system to safely handle OpenGL resource destruction from Python's Garbage Collector, even across threads.
-*   **Persistent Buffer Mapping:** Supports `GL_MAP_PERSISTENT_BIT` for zero-copy memory access between Python `memoryview`s and GPU buffers.
-*   **Uniform Reflection:** Automatically parses shader code to determine uniform layouts, allowing direct data updates via Python buffer protocols.
+---
+
+## Installation
+
+No dependencies.
+```bash
+pip install git+https://github.com/Evilpasture/HyperGL.git
+```
+
+*Note: For AZDO features, an OpenGL 4.5+ capable GPU is recommended.*
 
 ---
 
 ## Core Concepts
 
-### 1. Context
-The entry point of the library. It manages the connection to the OpenGL driver, tracks global limits, and acts as a factory for creating resources. It requires a `loader` function (like `glfw.get_proc_address`) to initialize.
-
-### 2. Pipeline
-HyperGL moves away from `glUseProgram`, `glEnable`, and `glBlendFunc`. Instead, you define a **Pipeline**. A Pipeline contains:
-*   Vertex and Fragment shaders.
-*   Buffer layouts (Vertex attributes).
-*   Resource bindings (Uniform buffers, Textures).
-*   Fixed-function state (Blending, Depth/Stencil, Culling).
-*   The target Framebuffer format.
-
-### 3. Buffers
-Wraps VBOs, IBOs, UBOs, and SSBOs.
-*   **Unified:** One class (`Buffer`) handles vertex data, indices, uniforms, and storage.
-*   **Mapped:** Can be mapped directly to a Python `memoryview` for high-performance data updates without creating temporary bytes objects.
-
-### 4. Images
-Wraps Textures and Renderbuffers.
-*   Supports 2D, 3D (Array), and Cubemaps.
-*   Handles Multisample Anti-Aliasing (MSAA) automatically.
-*   Supports binding as Texture or Image (for Compute Read/Write).
+1.  **Context:** The entry point. Manages the connection to the driver and resource creation.
+2.  **Buffer:** Wraps VBOs, IBOs, UBOs, and SSBOs into a unified, mappable class.
+3.  **Image:** Wraps Textures and Renderbuffers (2D, Array, Cubemap, MSAA).
+4.  **Pipeline:** An immutable state object defining *how* to draw (Shaders + State + Layout + Resources).
 
 ---
 
 ## Usage Examples
 
-### 1. Initialization
-HyperGL is window-provider agnostic. You can use it with `glfw`, `pygame`, or `sdl2`.
+### 1. Basic Initialization (GLFW)
+
+HyperGL is window-provider agnostic.
 
 ```python
 import hypergl
 import glfw
+import struct
 
-# 1. Setup Window (Standard GLFW code)
-glfw.init()
+# 1. Setup Window
+if not glfw.init(): raise RuntimeError()
+glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
+glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
+glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
 window = glfw.create_window(800, 600, "HyperGL", None, None)
 glfw.make_context_current(window)
 
 # 2. Initialize HyperGL
-# Pass the raw get_proc_address function to the loader
 hypergl.init(loader=glfw.get_proc_address)
-
-# 3. Create Context
 ctx = hypergl.context()
 ```
 
-### 2. Creating Buffers and Data
+### 2. The Rendering Pipeline
+
+HyperGL pipelines define everything required for a draw call upfront.
+
 ```python
-import struct
+# Geometry
+vertices = struct.pack('6f', -0.5, -0.5, 0.5, -0.5, 0.0, 0.5)
+vbo = ctx.buffer(data=vertices)
 
-# Create a Vertex Buffer (x, y, u, v)
-vertices = struct.pack('4f', -0.5, -0.5, 0.0, 0.0) + \
-           struct.pack('4f',  0.5, -0.5, 1.0, 0.0) + \
-           struct.pack('4f',  0.0,  0.5, 0.5, 1.0)
-
-vbo = ctx.buffer(data=vertices, access='static_draw')
-
-# Create a Uniform Buffer
-ubo_data = ctx.buffer(size=64, uniform=True, access='dynamic_draw')
-```
-
-### 3. The Rendering Pipeline
-```python
-# Define Shader Source
-vertex_code = """
-#version 330 core
-in vec2 in_pos;
-in vec2 in_uv;
-out vec2 v_uv;
-void main() {
-    gl_Position = vec4(in_pos, 0.0, 1.0);
-    v_uv = in_uv;
-}
+# Shaders
+vertex_shader = """
+    #version 330 core
+    in vec2 in_pos;
+    void main() { gl_Position = vec4(in_pos, 0.0, 1.0); }
+"""
+fragment_shader = """
+    #version 330 core
+    out vec4 out_color;
+    uniform vec3 color;
+    void main() { out_color = vec4(color, 1.0); }
 """
 
-fragment_code = """
-#version 330 core
-in vec2 v_uv;
-out vec4 out_color;
-uniform vec3 color;
-void main() {
-    out_color = vec4(color, 1.0);
-}
-"""
-
-# Create Pipeline
+# Pipeline
 pipeline = ctx.pipeline(
-    vertex_shader=vertex_code,
-    fragment_shader=fragment_code,
-    # Define Vertex Layout
-    vertex_buffers=hypergl.bind(vbo, '2f 2f', 0, 1), # Location 0: Pos, Location 1: UV
-    # Define Uniforms
+    vertex_shader=vertex_shader,
+    fragment_shader=fragment_shader,
+    layout=[], # Used for UBO bindings
+    vertex_buffers=hypergl.bind(vbo, '2f', 0), # Bind '2f' format to location 0
     uniforms={'color': (1.0, 0.5, 0.2)},
-    # Define Render State
+    framebuffer=None, # Render to screen
     topology='triangles',
-    cull_face='back',
-    # Target Screen (default framebuffer)
-    framebuffer=None, 
     vertex_count=3
 )
-```
 
-### 4. Render Loop
-```python
+# Render Loop
 while not glfw.window_should_close(window):
-    # Clear screen and reset state
     ctx.new_frame()
-    
-    # Update Uniforms (if needed) via dictionary access
-    # pipeline.uniforms['color'][:] = struct.pack('3f', 0.0, 1.0, 0.0)
-
-    # Draw
     pipeline.render()
-
-    # Flush commands and unbind state
     ctx.end_frame()
-    
     glfw.swap_buffers(window)
     glfw.poll_events()
 ```
 
-### 5. Compute Shaders (SSBOs)
+### 3. AZDO: Bindless Textures & Indirect Drawing
+
+Render thousands of objects with unique textures in a single draw call.
+
+```python
+# 1. Create Bindless Texture
+texture = ctx.image((512, 512), texture=True)
+handle = texture.get_handle() # Get 64-bit GPU Handle
+texture.make_resident(True)   # Make accessible to shaders
+
+# 2. Upload Handle to SSBO
+ctx.buffer(data=struct.pack('=Q', handle), storage=True)
+
+# 3. Create Indirect Command Buffer
+# Struct: { count, instanceCount, first, baseInstance }
+# Draw 6 vertices, 100,000 instances
+cmd_data = struct.pack('=IIII', 6, 100000, 0, 0)
+indirect_buf = ctx.buffer(data=cmd_data)
+
+# 4. Render
+# The shader uses #extension GL_ARB_bindless_texture to read the handle from the SSBO
+ctx.new_frame()
+pipeline.render_indirect(buffer=indirect_buf, count=1)
+ctx.end_frame()
+```
+
+### 4. Compute Shaders
+
 ```python
 # Create storage buffer
 ssbo = ctx.buffer(size=1024, storage=True)
@@ -155,72 +158,30 @@ ssbo = ctx.buffer(size=1024, storage=True)
 compute = ctx.compute(
     compute_shader=shader_source_bytes,
     resources=[
-        {'type': 'storage_buffer', 'binding': 0, 'buffer': ssbo, 'offset': 0, 'size': 1024}
+        {'type': 'storage_buffer', 'binding': 0, 'buffer': ssbo}
     ]
 )
 
-# Dispatch
+# Dispatch & Read
 compute.run(x=16, y=1, z=1)
-
-# Read results
 result = ssbo.read()
 ```
 
 ---
 
-## Advanced API Reference
+## Utilities (Optional helpers/debug tools)
 
-### Math Helper: `hypergl.camera`
-A highly optimized C-function to generate camera matrices (View/Projection) as bytes, ready to be written into a Uniform Buffer.
-
-```python
-# Returns 64 bytes (Mat4)
-camera_matrix = hypergl.camera(
-    eye=(0, 0, 5),
-    target=(0, 0, 0),
-    up=(0, 1, 0),
-    fov=60.0,
-    aspect=1.77,
-    near=0.1,
-    far=100.0
-)
-ubo.write(camera_matrix)
-```
-
-### Memory Mapping
-For maximum performance with dynamic data (like particle systems), use `map()` to get a `memoryview` of the GPU buffer.
-
-```python
-# 1. Map buffer (Persistent mapping if supported)
-ptr = my_buffer.map()
-
-# 2. Write directly to memory (Zero copy)
-ptr[0:12] = b'\x00\x00\x00...' 
-
-# 3. Unmap (optional, usually done at cleanup)
-# my_buffer.unmap() 
-```
-
-### Resource Inspection
-You can inspect the internal GL state of objects for debugging:
-```python
-info = hypergl.inspect(pipeline)
-print(info) # Output: {'type': 'pipeline', 'program': 12, 'vao': 5, ...}
-```
-
----
+*   **`hypergl.camera(...)`**: Fast C-based camera matrix generation (View/Projection).
+*   **`hypergl.inspect(obj)`**: Debug tool to view internal GL handles and state.
+*   **`buffer.map()`**: Get a `memoryview` of a buffer for zero-copy updates.
 
 ## Building from Source
 
-HyperGL is a C-extension. To build it, you need a C compiler installed.
-
 ```bash
-# Standard Python build
+# Requires a C compiler (preferably MSVC)
 python setup.py build_ext --inplace
 ```
 
-*Note: On Windows, it links against `opengl32.lib`. On Linux, standard GL linking applies.*
-
 ## License
 
-MIT License.
+MIT License

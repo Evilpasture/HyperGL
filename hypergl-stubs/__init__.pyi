@@ -1,24 +1,5 @@
 # MIT License
-
 # Copyright (c) 2024 Szabolcs Dombi
-
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-
-# The above copyright notice and this permission notice shall be included in all
-# copies or substantial portions of the Software.
-
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
 
 from typing import Any, Dict, Iterable, List, Literal, Protocol, Tuple, TypedDict
 
@@ -399,6 +380,20 @@ class Image:
             bytes object if `into` is None.
         """
         ...
+    
+    # --- ADD THESE METHODS ---
+    def get_handle(self) -> int:
+        """
+        Get the 64-bit bindless texture handle (GL_ARB_bindless_texture).
+        Creates the handle if it doesn't exist.
+        """
+        ...
+
+    def make_resident(self, resident: bool = True) -> None:
+        """
+        Make the bindless texture handle resident (accessible by shaders) or non-resident.
+        """
+        ...
 
     def blit(
         self,
@@ -432,6 +427,18 @@ class Pipeline:
     def render(self) -> None:
         """
         Execute the draw call (glDrawArrays or glDrawElements) using the encapsulated state.
+        """
+        ...
+
+    def render_indirect(self, buffer: Buffer, count: int, offset: int = 0, stride: int = 0) -> None:
+        """
+        Execute an indirect draw call (glMultiDrawArraysIndirect or glMultiDrawElementsIndirect).
+        
+        Args:
+            buffer: A Buffer object containing the draw commands.
+            count: The number of draw commands to execute.
+            offset: Byte offset into the buffer where commands start.
+            stride: Byte stride between commands. 0 means tightly packed.
         """
         ...
 

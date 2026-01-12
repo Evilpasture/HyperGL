@@ -251,6 +251,10 @@ UNIFORM_PACKER = {
     0x8B69: (22, 8, 'f'),
     0x8B6A: (23, 12, 'f'),
     0x8B5C: (24, 16, 'f'),
+
+    0x8B5C: (24, 16, 'f'),
+    # Add support for GL_UNSIGNED_INT64_ARB (Bindless Handles)
+    0x140F: (25, 1, 'Q'), 
 }
 
 class DefaultLoader:

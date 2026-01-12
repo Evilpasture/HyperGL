@@ -444,5 +444,25 @@
     hypergl_glBindBufferBase(target, index, buffer) {
         gl.bindBufferBase(target, index, glo[buffer]);
     },
+    // --- AZDO Stubs (Not supported in WebGL 2.0) ---
+    hypergl_glGetTextureHandleARB(texture) {
+        console.warn("glGetTextureHandleARB not supported in WebGL");
+        return 0; // Return 0 handle
+    },
+    hypergl_glMakeTextureHandleResidentARB(handle) {
+        // No-op
+    },
+    hypergl_glMakeTextureHandleNonResidentARB(handle) {
+        // No-op
+    },
+    hypergl_glUniformHandleui64ARB(location, handle) {
+        console.warn("glUniformHandleui64ARB not supported in WebGL");
+    },
+    hypergl_glMultiDrawArraysIndirect(mode, indirect, drawcount, stride) {
+        console.warn("glMultiDrawArraysIndirect not supported in WebGL");
+    },
+    hypergl_glMultiDrawElementsIndirect(mode, type, indirect, drawcount, stride) {
+         console.warn("glMultiDrawElementsIndirect not supported in WebGL");
+    },
   };
 }

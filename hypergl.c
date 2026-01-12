@@ -27,6 +27,8 @@
 
 // --- Struct Definitions ---
 
+typedef unsigned long long GLuint64;
+
 typedef struct VertexFormat
 {
     int type;
@@ -314,6 +316,9 @@ typedef struct Image
     int level_count;
 
     int external;
+
+    GLuint64 bindless_handle;
+    int is_resident;
 } Image;
 
 typedef struct RenderParameters
@@ -397,6 +402,27 @@ typedef struct BufferView
     int offset;
     int size;
 } BufferView;
+
+// --- Indirect Command Structs (Layout matches GPU requirement) ---
+#pragma pack(push, 1) // Ensure no hidden padding is added by compiler
+
+typedef struct {
+    uint32_t count;
+    uint32_t instanceCount;
+    uint32_t first;
+    uint32_t baseInstance;
+} DrawArraysIndirectCommand; // 16 bytes (Perfectly aligned)
+
+typedef struct {
+    uint32_t count;
+    uint32_t instanceCount;
+    uint32_t firstIndex;
+    int32_t  baseVertex;
+    uint32_t baseInstance;
+    uint32_t padding; // Add 4 bytes to make it 24, OR 3 to make it 32
+} DrawElementsIndirectCommand;
+
+#pragma pack(pop)
 
 typedef Py_ssize_t intptr;
 
@@ -573,6 +599,9 @@ typedef Py_ssize_t intptr;
 #define GL_BUFFER_DATA_SIZE    0x9303
 #define GL_BUFFER_SIZE 0x8764
 #define GL_BUFFER_IMMUTABLE_STORAGE  0x821F
+// --- AZDO / Indirect Constants ---
+#define GL_DRAW_INDIRECT_BUFFER 0x8F3F
+#define GL_PARAMETER_BUFFER_ARB 0x80EE // For count buffer if you go deeper into MDI
 
 
 
@@ -732,6 +761,13 @@ RESOLVE(void, glGetProgramResourceiv, int, int, int, int, const int *, int, int 
 RESOLVE(void, glGetProgramResourceName, int, int, int, int, int *, char *);
 RESOLVE(void, glGetBufferParameteriv, unsigned int, unsigned int, int *);
 
+RESOLVE(GLuint64, glGetTextureHandleARB, int);
+RESOLVE(void, glMakeTextureHandleResidentARB, GLuint64);
+RESOLVE(void, glMakeTextureHandleNonResidentARB, GLuint64);
+RESOLVE(void, glUniformHandleui64ARB, int, GLuint64); // Optional, for direct uniform setting
+RESOLVE(void, glMultiDrawArraysIndirect, int, const void *, int, int);
+RESOLVE(void, glMultiDrawElementsIndirect, int, int, const void *, int, int);
+
 #ifndef EXTERN_GL
 
 static void *load_opengl_function(PyObject *loader_function, const char *method)
@@ -890,7 +926,14 @@ static int load_gl(PyObject *loader)
     load(glGetProgramInterfaceiv);
     load(glGetProgramResourceiv);
     load(glGetProgramResourceName);
-    load(glGetBufferParameteriv)
+    load(glGetBufferParameteriv);
+
+    load(glGetTextureHandleARB);
+    load(glMakeTextureHandleResidentARB);
+    load(glMakeTextureHandleNonResidentARB);
+    load(glUniformHandleui64ARB);
+    load(glMultiDrawArraysIndirect);
+    load(glMultiDrawElementsIndirect);
 
 #undef load
 #undef check
@@ -3009,26 +3052,26 @@ static int get_limit(const int pname, const int min, const int max)
     int value = 0;
     glGetIntegerv(pname, &value);
 
-    // Keep track of which pname has already complained (simple dedupe)
-    static int last_warned_pname = 0;
-
-    if (glGetError() != GL_NO_ERROR) {
-        if (last_warned_pname != pname) {
-            fprintf(stderr, "GL limit 0x%x query failed, using min=%d\n", pname, min);
-            last_warned_pname = pname;
-        }
+    // Check if the query actually worked
+    GLenum err = glGetError();
+    if (err != GL_NO_ERROR) {
+        // Only print in Beta/Debug mode
+        #ifdef DEBUG
+        fprintf(stderr, "[HyperGL] Warning: Limit 0x%x query failed (Error 0x%x). Defaulting to %d\n", pname, err, min);
+        #endif
         return min;
     }
 
-    if (value < min || value > max) {
-        if (last_warned_pname != pname) {
-            fprintf(stderr, "GL limit 0x%x=%d clamped to [%d, %d]\n", pname, value, min, max);
-            last_warned_pname = pname;
-        }
+    // Clamping logic is great—keep it. 
+    // It prevents your C code from allocating 0 or INT_MAX memory.
+    if (value < min) {
+        #ifdef DEBUG
+        fprintf(stderr, "[HyperGL] Limit 0x%x (%d) below minimum. Clamped to %d\n", pname, value, min);
+        #endif
+        return min;
     }
-
-    if (value < min) return min;
     if (value > max) return max;
+
     return value;
 }
 
@@ -4036,6 +4079,9 @@ static Image *Context_meth_image(Context *self, PyObject *args, PyObject *kwargs
     res->layer_count = (array ? array : 1) * (cubemap ? 6 : 1);
     res->level_count = levels;
 
+    res->bindless_handle = 0;
+    res->is_resident = 0;
+
     if (fmt.buffer == GL_DEPTH || fmt.buffer == GL_DEPTH_STENCIL) {
         res->clear_value.clear_floats[0] = 1.0f;
     }
@@ -4071,6 +4117,58 @@ static Image *Context_meth_image(Context *self, PyObject *args, PyObject *kwargs
     
     PyObject_GC_Track(res);
     return (Image *)res;
+}
+
+static PyObject *Image_meth_get_handle(Image *self, PyObject *args)
+{
+    if (self->ctx->is_lost) {
+        PyErr_Format(PyExc_RuntimeError, "context lost");
+        return NULL;
+    }
+    
+    // Lazy creation of the handle
+    if (self->bindless_handle == 0) {
+        if (!glGetTextureHandleARB) {
+            PyErr_SetString(PyExc_RuntimeError, "Bindless textures not supported (GL_ARB_bindless_texture missing)");
+            return NULL;
+        }
+
+        PyMutex_Lock(&self->ctx->state_lock);
+        // Ensure texture is bound or just pass ID if DSA is supported, 
+        // but glGetTextureHandleARB usually takes the texture ID directly.
+        self->bindless_handle = glGetTextureHandleARB(self->image);
+        PyMutex_Unlock(&self->ctx->state_lock);
+
+        if (self->bindless_handle == 0) {
+             PyErr_SetString(PyExc_RuntimeError, "Failed to create texture handle");
+             return NULL;
+        }
+    }
+
+    return PyLong_FromUnsignedLongLong(self->bindless_handle);
+}
+
+static PyObject *Image_meth_make_resident(Image *self, PyObject *args)
+{
+    int resident = 1; // Default True
+    if (!PyArg_ParseTuple(args, "|p", &resident)) return NULL;
+
+    if (self->bindless_handle == 0) {
+        PyErr_SetString(PyExc_RuntimeError, "Texture has no handle. Call get_handle() first.");
+        return NULL;
+    }
+
+    PyMutex_Lock(&self->ctx->state_lock);
+    if (resident && !self->is_resident) {
+        glMakeTextureHandleResidentARB(self->bindless_handle);
+        self->is_resident = 1;
+    } else if (!resident && self->is_resident) {
+        glMakeTextureHandleNonResidentARB(self->bindless_handle);
+        self->is_resident = 0;
+    }
+    PyMutex_Unlock(&self->ctx->state_lock);
+    
+    Py_RETURN_NONE;
 }
 
 static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *kwargs)
@@ -5266,6 +5364,77 @@ static PyObject *Pipeline_meth_render(Pipeline *self, PyObject *args)
     Py_RETURN_NONE;
 }
 
+static PyObject *Pipeline_meth_render_indirect(Pipeline *self, PyObject *args, PyObject *kwargs)
+{
+    static char *keywords[] = {"buffer", "count", "offset", "stride", NULL};
+    PyObject *buffer_obj;
+    int draw_count;
+    int offset = 0;
+    int stride = 0; // 0 means tightly packed
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "Oi|ii", keywords, 
+        &buffer_obj, &draw_count, &offset, &stride)) {
+        return NULL;
+    }
+
+    if (self->ctx->is_lost) {
+        PyErr_Format(PyExc_RuntimeError, "context lost");
+        return NULL;
+    }
+
+    if (!PyObject_TypeCheck(buffer_obj, self->ctx->module_state->Buffer_type)) {
+        PyErr_SetString(PyExc_TypeError, "buffer must be a Buffer object");
+        return NULL;
+    }
+    Buffer *indirect_buffer = (Buffer *)buffer_obj;
+
+    PyMutex_Lock(&self->ctx->state_lock);
+
+    Viewport *viewport = (Viewport *)self->viewport_data_buffer.buf;
+    
+    // 1. Bind State
+    bind_viewport_internal(self->ctx, viewport);
+    bind_global_settings_internal(self->ctx, self->global_settings);
+    bind_draw_framebuffer_internal(self->ctx, self->framebuffer->obj);
+    bind_program_internal(self->ctx, self->program->obj);
+    bind_vertex_array_internal(self->ctx, self->vertex_array->obj);
+    bind_descriptor_set_internal(self->ctx, self->descriptor_set);
+
+    if (self->uniforms) {
+        bind_uniforms(self);
+    }
+
+    // 2. Bind Indirect Buffer
+    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, indirect_buffer->buffer);
+
+    // 3. Issue Draw Call
+    if (self->index_type) {
+        // Indexed Draw
+        glMultiDrawElementsIndirect(
+            self->topology, 
+            self->index_type, 
+            (const void *)(intptr_t)offset, 
+            draw_count, 
+            stride
+        );
+    } else {
+        // Array Draw
+        glMultiDrawArraysIndirect(
+            self->topology, 
+            (const void *)(intptr_t)offset, 
+            draw_count, 
+            stride
+        );
+    }
+
+    // Unbind indirect buffer to avoid accidental state pollution? 
+    // Usually kept bound in heavy loops, but safe to unbind here.
+    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
+
+    PyMutex_Unlock(&self->ctx->state_lock);
+    Py_RETURN_NONE;
+}
+
 static PyObject *Pipeline_get_viewport(Pipeline *self, void *closure)
 {
     return Py_BuildValue("(iiii)", self->viewport.x, self->viewport.y, self->viewport.width, self->viewport.height);
@@ -5814,10 +5983,28 @@ static void Buffer_dealloc(Buffer *self)
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
+// You must ensure that if an Image is destroyed, the handle is treated correctly. 
+// Interestingly, glDeleteTextures implicitly destroys the handle, 
+// so specific cleanup logic for the handle itself isn't strictly required unless you need to ensure it is non-resident before deletion. 
+// It is good practice to ensure it is non-resident.
 static void Image_dealloc(Image *self)
 {
     if (PyObject_GC_IsTracked((PyObject *)self))
         PyObject_GC_UnTrack(self);
+
+    if (self->bindless_handle && self->is_resident && self->ctx && !self->ctx->is_lost) {
+        // We technically need the lock here, but dealloc is tricky with locks.
+        // However, since we are destroying the object, we just want to ensure GL is happy.
+        // If the context is still alive, we should try to make it non-resident.
+        // Note: Doing GL calls in dealloc can be dangerous if on wrong thread. 
+        // Ideally, the user calls .make_resident(False) manually. 
+        // But the GL driver often handles cleanup on texture deletion.
+    }
+
+    // NOTE: The existing enqueue_trash system puts the Texture ID into a queue to be deleted later on the main thread (via new_frame). 
+    // When glDeleteTextures is finally called on that ID, the driver invalidates the handle. 
+    // No extra code is strictly needed there for the C extension, 
+    // provided the user understands that accessing a handle after the image object dies is UB (Undefined Behavior).
         
     Context *ctx = self->ctx;
     int image_id = self->image;
@@ -5959,6 +6146,8 @@ static PyMethodDef Image_methods[] = {
     {"mipmaps", (PyCFunction)Image_meth_mipmaps, METH_NOARGS, NULL},
     {"blit", (PyCFunction)Image_meth_blit, METH_VARARGS | METH_KEYWORDS, NULL},
     {"face", (PyCFunction)Image_meth_face, METH_VARARGS | METH_KEYWORDS, NULL},
+    {"get_handle", (PyCFunction)Image_meth_get_handle, METH_NOARGS, NULL},
+    {"make_resident", (PyCFunction)Image_meth_make_resident, METH_VARARGS, NULL},
     {0},
 };
 
@@ -5979,6 +6168,7 @@ static PyMemberDef Image_members[] = {
 
 static PyMethodDef Pipeline_methods[] = {
     {"render", (PyCFunction)Pipeline_meth_render, METH_NOARGS, NULL},
+    {"render_indirect", (PyCFunction)Pipeline_meth_render_indirect, METH_VARARGS | METH_KEYWORDS, NULL},
     {0},
 };
 
