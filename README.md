@@ -22,6 +22,13 @@ HyperGL v1.1 introduces **AZDO (Approaching Zero Driver Overhead)** features, ef
 *   **1,000,000 Sprites:** ~44 FPS (GPU Fill-rate bound)
 *   **CPU Usage:** ~15% (Idle)
 
+> **⚠️ WARNING: Bindless Texture Safety**
+> 
+> 1.  **Residency:** You **MUST** call `image.make_resident(True)` before the GPU attempts to access the handle. Failure to do so will crash the GPU driver.
+> 2.  **Lifetime:** You **MUST** keep a Python reference to the `Image` object alive for as long as its handle is in use by a shader. If the `Image` object is Garbage Collected, the handle becomes invalid, and the GPU will crash.
+> 3.  **Immutability:** Do not write to (`image.write`) or resize an image while it is resident.
+
+Otherwise, you shot yourself.
 ---
 
 ## Key Features
