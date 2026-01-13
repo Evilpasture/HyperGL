@@ -3,6 +3,58 @@
 // Copyright (c) 2024 Szabolcs Dombi
 
 #include <Python.h>
+
+#ifndef Py_MOD_GIL_NOT_USED
+    #define Py_MOD_GIL_NOT_USED 0
+#endif
+
+// In Python 3.13+, PyMutex is a 1-byte efficient lock.
+// In older versions, we fallback to OS-level locks (PyThread_type_lock).
+#if PY_VERSION_HEX < 0x030D0000
+    typedef PyThread_type_lock PyMutex;
+    
+    static void PyMutex_Lock(PyMutex *m) {
+        if (*m == NULL) {
+            *m = PyThread_allocate_lock();
+        }
+        PyThread_acquire_lock(*m, 1);
+    }
+    
+    static void PyMutex_Unlock(PyMutex *m) {
+        if (*m != NULL) {
+            PyThread_release_lock(*m);
+        }
+    }
+    
+    // Shim for PyDict_GetItemRef (New in 3.13)
+    // Safe replacement for the borrowed reference PyDict_GetItem
+    static int PyDict_GetItemRef(PyObject *p, PyObject *key, PyObject **result) {
+        *result = PyDict_GetItem(p, key);
+        if (*result) {
+            Py_INCREF(*result);
+            return 1; // Found
+        }
+        // PyDict_GetItem suppresses errors, but GetItemRef shouldn't for other cases.
+        // For simplicity in this shim, we assume not found if NULL and no error logic needed.
+        return 0; // Not found
+    }
+
+    // Shim for PyDict_SetDefaultRef (New in 3.13)
+    static int PyDict_SetDefaultRef(PyObject *d, PyObject *key, PyObject *default_value, PyObject **result) {
+        PyObject *existing = PyDict_GetItem(d, key);
+        if (existing) {
+            *result = Py_NewRef(existing);
+            return 1; // Key existed
+        }
+        if (PyDict_SetItem(d, key, default_value) < 0) {
+            return -1; // Error
+        }
+        *result = Py_NewRef(default_value);
+        return 0; // New key inserted
+    }
+
+#endif
+
 #include <structmember.h>
 
 #ifndef HYPERGL_VERSION
@@ -6688,6 +6740,7 @@ static int module_exec(PyObject *self)
 
 static PyModuleDef_Slot module_slots[] = {
     {Py_mod_exec, (void *)module_exec},
+    // Tells the Python interpreter to go away and let us do our own locking instead.
     {Py_mod_gil, Py_MOD_GIL_NOT_USED},
     {0, NULL}
 };
