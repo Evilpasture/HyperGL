@@ -311,10 +311,10 @@ class DefaultLoader:
                 pass
 
 def headless_context_windows():
-    from ctypes import c_int, c_void_p, cast, windll, byref, Structure, sizeof
-    from ctypes.wintypes import WORD, DWORD, BYTE, HMODULE, LPCSTR, HWND, HDC, UINT, INT, BOOL, HANDLE, LPVOID
+    from ctypes import c_int, c_void_p, cast, windll, byref, Structure, sizeof, POINTER
+    from ctypes.wintypes import WORD, DWORD, BYTE, LPCSTR, HWND, HDC, UINT, INT, BOOL, HANDLE
     
-    # HGLRC is not in wintypes, usually it's just a HANDLE
+    # HGLRC is not in standard wintypes
     HGLRC = HANDLE
 
     kernel32 = windll.kernel32
@@ -352,23 +352,31 @@ def headless_context_windows():
             ('dwDamageMask', DWORD),
         ]
 
+    # Define WNDCLASSA structure
+    class WNDCLASSA(Structure):
+        _fields_ = [
+            ("style", UINT),
+            ("lpfnWndProc", c_void_p),
+            ("cbClsExtra", INT),
+            ("cbWndExtra", INT),
+            ("hInstance", c_void_p),
+            ("hIcon", c_void_p),
+            ("hCursor", c_void_p),
+            ("hbrBackground", c_void_p),
+            ("lpszMenuName", LPCSTR),
+            ("lpszClassName", LPCSTR),
+        ]
+
+    # Set argument types for safety
+    user32.RegisterClassA.argtypes = [POINTER(WNDCLASSA)]
+    user32.CreateWindowExA.argtypes = [
+        DWORD, LPCSTR, LPCSTR, DWORD, INT, INT, INT, INT, HWND, c_void_p, c_void_p, c_void_p
+    ]
+    user32.CreateWindowExA.restype = HWND
+
     def create_window(name):
         def_proc_addr = cast(user32.DefWindowProcA, c_void_p).value
         hinstance = kernel32.GetModuleHandleA(None)
-        
-        class WNDCLASSA(Structure):
-            _fields_ = [
-                ("style", UINT),
-                ("lpfnWndProc", c_void_p),
-                ("cbClsExtra", INT),
-                ("cbWndExtra", INT),
-                ("hInstance", c_void_p),
-                ("hIcon", c_void_p),
-                ("hCursor", c_void_p),
-                ("hbrBackground", c_void_p),
-                ("lpszMenuName", LPCSTR),
-                ("lpszClassName", LPCSTR),
-            ]
         
         wc = WNDCLASSA()
         wc.style = 32 # CS_OWNDC
@@ -376,22 +384,25 @@ def headless_context_windows():
         wc.hInstance = hinstance
         wc.lpszClassName = name
         
-        # Ignore error (class might exist)
-        # user32.RegisterClassA(byref(wc))
-        HWND_MESSAGE = -3
+        # CRITICAL FIX: Register the class. 
+        # If this fails (e.g. class already exists from previous run), we ignore it 
+        # and attempt creation anyway.
+        user32.RegisterClassA(byref(wc))
         
+        # HWND_MESSAGE = -3 (casted to HWND/c_void_p equivalent)
+        # We use a message-only window for headless contexts
         hwnd = user32.CreateWindowExA(
             0, name, name, 
             0, 0, 0, 0, 0, 
-            -3, 0, hinstance, 0
+            HWND(-3), None, hinstance, None
         )
         return hwnd
 
-    # Use PID to ensure clean environment
+    # 1. Create Dummy Window & Context to load Extensions
     dummy_name = f"Dummy_{os.getpid()}".encode()
     hwnd = create_window(dummy_name)
     if not hwnd:
-        raise RuntimeError("Failed to create dummy window")
+        raise RuntimeError(f"Failed to create dummy window (Error: {kernel32.GetLastError()})")
 
     hdc = user32.GetDC(hwnd)
     
@@ -409,26 +420,27 @@ def headless_context_windows():
     rc = opengl32.wglCreateContext(hdc)
     opengl32.wglMakeCurrent(hdc, rc)
     
+    # 2. Load WGL Extensions
     wglGetProcAddress = opengl32.wglGetProcAddress
     wglGetProcAddress.restype = c_void_p
     
     wglChoosePixelFormatARB_addr = wglGetProcAddress(b"wglChoosePixelFormatARB")
     wglCreateContextAttribsARB_addr = wglGetProcAddress(b"wglCreateContextAttribsARB")
     
+    # 3. Destroy Dummy
     opengl32.wglMakeCurrent(0, 0)
     opengl32.wglDeleteContext(rc)
     user32.ReleaseDC(hwnd, hdc)
     user32.DestroyWindow(hwnd)
 
-    # --- REAL CONTEXT CREATION ---
+    # 4. Create Real Context
     real_name = f"HyperGL_{os.getpid()}".encode()
     hwnd = create_window(real_name)
     if not hwnd:
-         raise RuntimeError("Failed to create window")
+         raise RuntimeError(f"Failed to create window (Error: {kernel32.GetLastError()})")
     hdc = user32.GetDC(hwnd)
 
     if not wglChoosePixelFormatARB_addr or not wglCreateContextAttribsARB_addr:
-        # Fallback to old GL if ARB missing (unlikely on modern GPU)
         pf = gdi32.ChoosePixelFormat(hdc, byref(pfd))
         gdi32.SetPixelFormat(hdc, pf, byref(pfd))
         rc = opengl32.wglCreateContext(hdc)
@@ -437,22 +449,22 @@ def headless_context_windows():
 
     import ctypes
     WGLCHOOSEPIXELFORMATARB = ctypes.WINFUNCTYPE(
-        BOOL, HDC, ctypes.POINTER(c_int), ctypes.POINTER(ctypes.c_float),
-        UINT, ctypes.POINTER(c_int), ctypes.POINTER(UINT)
+        BOOL, HDC, POINTER(c_int), POINTER(ctypes.c_float),
+        UINT, POINTER(c_int), POINTER(UINT)
     )
     WGLCREATECONTEXTATTRIBSARB = ctypes.WINFUNCTYPE(
-        HGLRC, HDC, HGLRC, ctypes.POINTER(c_int)
+        HGLRC, HDC, HGLRC, POINTER(c_int)
     )
     
     wglChoosePixelFormatARB = WGLCHOOSEPIXELFORMATARB(wglChoosePixelFormatARB_addr)
     wglCreateContextAttribsARB = WGLCREATECONTEXTATTRIBSARB(wglCreateContextAttribsARB_addr)
     
     WGL_DRAW_TO_WINDOW_ARB = 0x2001
-    WGL_ACCELERATION_ARB = 0x2003
     WGL_SUPPORT_OPENGL_ARB = 0x2010
     WGL_DOUBLE_BUFFER_ARB = 0x2011
     WGL_PIXEL_TYPE_ARB = 0x2013
     WGL_TYPE_RGBA_ARB = 0x202B
+    WGL_ACCELERATION_ARB = 0x2003
     WGL_FULL_ACCELERATION_ARB = 0x2027
     WGL_COLOR_BITS_ARB = 0x2014
     WGL_DEPTH_BITS_ARB = 0x2022
@@ -481,7 +493,7 @@ def headless_context_windows():
     WGL_CONTEXT_PROFILE_MASK_ARB = 0x9126
     WGL_CONTEXT_CORE_PROFILE_BIT_ARB = 0x00000001
     
-    # --- REQUEST OPENGL 4.6 ---
+    # Request OpenGL 4.6
     ctx_attribs = (c_int * 7)(
         WGL_CONTEXT_MAJOR_VERSION_ARB, 4,
         WGL_CONTEXT_MINOR_VERSION_ARB, 6,
@@ -490,19 +502,14 @@ def headless_context_windows():
     )
     
     rc = wglCreateContextAttribsARB(hdc, 0, ctx_attribs)
-    if not rc:
-         # Fallback to 4.5 if 4.6 fails
-         ctx_attribs[3] = 5
-         rc = wglCreateContextAttribsARB(hdc, 0, ctx_attribs)
     
+    # Fallbacks for older GPUs
     if not rc:
-         # Fallback to 4.3 (Minimum for Compute)
-         ctx_attribs[3] = 3
+         ctx_attribs[3] = 5 # 4.5
          rc = wglCreateContextAttribsARB(hdc, 0, ctx_attribs)
-
     if not rc:
-         # Final Fallback to standard context (might be 1.1 or 3.3 compat)
-         rc = opengl32.wglCreateContext(hdc)
+         ctx_attribs[3] = 3 # 4.3 (Compute limit)
+         rc = wglCreateContextAttribsARB(hdc, 0, ctx_attribs)
          
     if not opengl32.wglMakeCurrent(hdc, rc):
         raise RuntimeError("Failed to make context current")
