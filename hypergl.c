@@ -153,6 +153,8 @@ static void *load_opengl_function(PyObject *loader_function, const char *method)
         return NULL;
     }
     void *ptr = PyLong_AsVoidPtr(res);
+    if (!ptr && PyErr_Occurred())
+        return NULL;
     Py_DECREF(res);
     return ptr;
 }
@@ -437,6 +439,15 @@ static void bind_uniforms(Pipeline *self)
         case 24:
             glUniformMatrix4fv(header->binding[i].location, header->binding[i].count, 0, ptr);
             break;
+        default:
+            // Unknown uniform function ID
+            // In release: skip
+            // In debug: scream loudly
+        #ifdef DEBUG
+            fprintf(stderr, "Invalid uniform function id: %d\n",
+                    header->binding[i].function);
+        #endif
+            break;
         }
     }
 }
@@ -689,69 +700,96 @@ static inline int least_one(int value)
     }
 
 // Adapted to use ModuleState for caching
-static int get_vertex_format(const ModuleState *state, PyObject *helper, PyObject *name, VertexFormat *res)
+static int get_vertex_format(
+    const ModuleState *state,
+    PyObject *helper,
+    PyObject *name,
+    VertexFormat *res)
 {
-    if (!helper || !name || name == Py_None) return 0;
+    if (!helper || !name || name == Py_None)
+        return 0;
 
     FETCH_HELPER_DICT(state, helper, VERTEX_FORMAT, lookup);
 
     PyObject *tup = PyDict_GetItem(lookup, name);
-    
-    // Check if it's a valid tuple with at least 4 elements
-    if (!tup || !PyTuple_Check(tup) || PyTuple_Size(tup) < 4) {
-        Py_DECREF(lookup);
-        return 0;
-    }
+    if (!tup || !PyTuple_Check(tup) || PyTuple_Size(tup) < 4)
+        goto fail;
 
-    res->type      = to_int(PyTuple_GetItem(tup, 0));
-    res->size      = to_int(PyTuple_GetItem(tup, 1));
-    res->normalize = to_int(PyTuple_GetItem(tup, 2));
-    res->integer   = to_int(PyTuple_GetItem(tup, 3));
+    PyObject *o0 = PyTuple_GetItem(tup, 0);
+    PyObject *o1 = PyTuple_GetItem(tup, 1);
+    PyObject *o2 = PyTuple_GetItem(tup, 2);
+    PyObject *o3 = PyTuple_GetItem(tup, 3);
+
+    if (!o0 || !o1 || !o2 || !o3)
+        goto fail;
+
+    res->type      = to_int(o0);
+    res->size      = to_int(o1);
+    res->normalize = to_int(o2);
+    res->integer   = to_int(o3);
 
     Py_DECREF(lookup);
     return 1;
+
+fail:
+    Py_DECREF(lookup);
+    return 0;
 }
 
+
 // Adapted to use ModuleState for caching
-static int get_image_format(const ModuleState *state, PyObject *helper, PyObject *name, ImageFormat *res)
+static int get_image_format(
+    const ModuleState *state,
+    PyObject *helper,
+    PyObject *name,
+    ImageFormat *res)
 {
-    if (!helper || !name || name == Py_None) return 0;
+    if (!helper || !name || name == Py_None)
+        return 0;
 
     FETCH_HELPER_DICT(state, helper, IMAGE_FORMAT, lookup);
 
     PyObject *tup = PyDict_GetItem(lookup, name);
-    
-    if (!tup || !PyTuple_Check(tup) || PyTuple_Size(tup) < 9) {
-        Py_DECREF(lookup);
-        return 0;
+    if (!tup || !PyTuple_Check(tup) || PyTuple_Size(tup) < 9)
+        goto fail;
+
+    PyObject *items[9];
+    for (int i = 0; i < 9; i++) {
+        items[i] = PyTuple_GetItem(tup, i);
+        if (!items[i])
+            goto fail;
     }
 
-    res->internal_format = to_int(PyTuple_GetItem(tup, 0));
-    res->format          = to_int(PyTuple_GetItem(tup, 1));
-    res->type            = to_int(PyTuple_GetItem(tup, 2));
-    res->buffer          = to_int(PyTuple_GetItem(tup, 3));
-    res->components      = to_int(PyTuple_GetItem(tup, 4));
-    res->pixel_size      = to_int(PyTuple_GetItem(tup, 5));
-    res->color           = to_int(PyTuple_GetItem(tup, 6));
-    res->flags           = to_int(PyTuple_GetItem(tup, 7));
+    res->internal_format = to_int(items[0]);
+    res->format          = to_int(items[1]);
+    res->type            = to_int(items[2]);
+    res->buffer          = to_int(items[3]);
+    res->components      = to_int(items[4]);
+    res->pixel_size      = to_int(items[5]);
+    res->color           = to_int(items[6]);
+    res->flags           = to_int(items[7]);
 
-    PyObject *utf_obj = PyTuple_GetItem(tup, 8);
-    if (PyUnicode_Check(utf_obj)) {
+    res->clear_type = '\0';
+    if (PyUnicode_Check(items[8])) {
         Py_ssize_t size;
-        const char *str = PyUnicode_AsUTF8AndSize(utf_obj, &size);
+        const char *str = PyUnicode_AsUTF8AndSize(items[8], &size);
+        if (!str)
+            goto fail;
         res->clear_type = (size > 0) ? str[0] : '\0';
-    } else {
-        res->clear_type = '\0';
     }
 
     Py_DECREF(lookup);
     return 1;
+
+fail:
+    Py_DECREF(lookup);
+    return 0;
 }
 
 // Adapted to use ModuleState for caching
 static int get_buffer_access(const ModuleState *state, PyObject *helper, PyObject *name, int *res)
 {
-    if (!helper || helper == Py_None) return 0;
+    if (!helper || helper == Py_None || !name || name == Py_None) return 0;
 
     FETCH_HELPER_DICT(state, helper, BUFFER_ACCESS, lookup);
 
@@ -762,47 +800,69 @@ static int get_buffer_access(const ModuleState *state, PyObject *helper, PyObjec
         return 0;
     }
 
-    *res = to_int(value);
+    int v = to_int(value);
+    if (PyErr_Occurred()) {
+        PyErr_Clear();
+        Py_DECREF(lookup);
+        return 0;
+    }
+    *res = v;
     Py_DECREF(lookup);
     return 1;
 }
 
 // Adapted to use ModuleState for caching
-static int get_topology(const ModuleState *state, PyObject *helper, PyObject *name, int *res)
+static int get_topology(
+    const ModuleState *state,
+    PyObject *helper,
+    PyObject *name,
+    int *res)
 {
-    if (!helper || helper == Py_None) return 0;
+    if (!helper || helper == Py_None || !name || name == Py_None)
+        return 0;
+
     FETCH_HELPER_DICT(state, helper, TOPOLOGY, lookup);
 
     PyObject *value = PyDict_GetItem(lookup, name);
+    if (!value)
+        goto fail;
 
-    if (!value) {
-        Py_DECREF(lookup);
-        return 0;
-    }
-    int overflow;
+    int overflow = 0;
     long val = PyLong_AsLongAndOverflow(value, &overflow);
-    if (val == -1 && PyErr_Occurred()) {
-        PyErr_Clear();
-        Py_DECREF(lookup);
-        return 0; 
-    }
-    
+    if (overflow || (val == -1 && PyErr_Occurred()))
+        goto fail;
+
+    if (val < INT_MIN || val > INT_MAX)
+        goto fail;
+
     *res = (int)val;
-    Py_DECREF(lookup); 
+    Py_DECREF(lookup);
     return 1;
+
+fail:
+    PyErr_Clear();
+    Py_DECREF(lookup);
+    return 0;
 }
+
 
 static int count_mipmaps(int width, int height)
 {
+    if (width <= 0 || height <= 0)
+        return 0;  // or assert / error out
+
     int size = width > height ? width : height;
     int levels = 0;
-    while (size)
+
+    while (size > 0)
     {
-        levels += 1;
-        size /= 2;
+        levels++;
+        size >>= 1;
     }
+
     return levels;
 }
+
 
 static void remove_dict_value(PyObject *dict, PyObject *obj)
 {
