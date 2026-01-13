@@ -471,7 +471,7 @@ typedef struct {
     uint32_t firstIndex;
     int32_t  baseVertex;
     uint32_t baseInstance;
-    uint32_t padding; // Add 4 bytes to make it 24, OR 3 to make it 32
+    // uint32_t padding; // "Add 4 bytes to make it 24, OR 3 to make it 32" is FALSE. just a heads-up.
 } DrawElementsIndirectCommand;
 
 #pragma pack(pop)
@@ -4626,10 +4626,9 @@ static PyObject *Compute_meth_run(Compute *self, PyObject *args)
     if (self->uniforms) {
         bind_uniforms((Pipeline *)self); 
     }
-    Py_BEGIN_ALLOW_THREADS
     glDispatchCompute(x, y, z);
     glMemoryBarrier(GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
-    Py_END_ALLOW_THREADS
+    // glMemoryBarrier(GL_ALL_BARRIER_BITS); // sanity check
     PyMutex_Unlock(&self->ctx->state_lock);
 
     Py_RETURN_NONE;
@@ -5525,11 +5524,20 @@ static PyObject *Pipeline_meth_render_indirect(Pipeline *self, PyObject *args, P
     PyObject *buffer_obj;
     int draw_count;
     int offset = 0;
-    int stride = 0; // 0 means tightly packed
+    int stride = self->index_type
+    ? sizeof(DrawElementsIndirectCommand)
+    : sizeof(DrawArraysIndirectCommand);
+
+    int user_stride = -1;
+
 
     if (!PyArg_ParseTupleAndKeywords(args, kwargs, "Oi|ii", keywords, 
-        &buffer_obj, &draw_count, &offset, &stride)) {
+        &buffer_obj, &draw_count, &offset, &user_stride)) {
         return NULL;
+    }
+
+    if (user_stride > 0) {
+        stride = user_stride;
     }
 
     if (self->ctx->is_lost) {
@@ -5576,13 +5584,23 @@ static PyObject *Pipeline_meth_render_indirect(Pipeline *self, PyObject *args, P
     // 2. Bind Indirect Buffer
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, indirect_buffer->buffer);
 
+    intptr_t command_size = self->index_type
+    ? sizeof(DrawElementsIndirectCommand)
+    : sizeof(DrawArraysIndirectCommand);
+
+    intptr_t byte_offset = (intptr_t)offset * command_size;
     // 3. Issue Draw Call
+    glMemoryBarrier(
+        GL_COMMAND_BARRIER_BIT |
+        GL_SHADER_STORAGE_BARRIER_BIT
+    );
+
     if (self->index_type) {
         // Indexed Draw
         glMultiDrawElementsIndirect(
             self->topology, 
             self->index_type, 
-            (const void *)(intptr_t)offset, 
+            (const void *)(intptr_t)byte_offset, 
             draw_count, 
             stride
         );
@@ -5590,14 +5608,11 @@ static PyObject *Pipeline_meth_render_indirect(Pipeline *self, PyObject *args, P
         // Array Draw
         glMultiDrawArraysIndirect(
             self->topology, 
-            (const void *)(intptr_t)offset, 
+            (const void *)(intptr_t)byte_offset, 
             draw_count, 
             stride
         );
     }
-
-    // Unbind indirect buffer to avoid accidental state pollution
-    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
 
     PyMutex_Unlock(&self->ctx->state_lock);
     Py_RETURN_NONE;
