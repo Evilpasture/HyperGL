@@ -654,6 +654,7 @@ typedef Py_ssize_t intptr;
 // --- AZDO / Indirect Constants ---
 #define GL_DRAW_INDIRECT_BUFFER 0x8F3F
 #define GL_PARAMETER_BUFFER_ARB 0x80EE // For count buffer if you go deeper into MDI
+#define GL_COMMAND_BARRIER_BIT 0x00000040
 
 
 
@@ -4627,7 +4628,7 @@ static PyObject *Compute_meth_run(Compute *self, PyObject *args)
     }
     Py_BEGIN_ALLOW_THREADS
     glDispatchCompute(x, y, z);
-    glMemoryBarrier(GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+    glMemoryBarrier(GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
     Py_END_ALLOW_THREADS
     PyMutex_Unlock(&self->ctx->state_lock);
 
