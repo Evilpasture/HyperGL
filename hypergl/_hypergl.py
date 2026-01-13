@@ -259,6 +259,7 @@ UNIFORM_PACKER = {
 
 class DefaultLoader:
     def __init__(self):
+        self.extra: tuple | None = None
         import ctypes
 
         def funcptr(lib, name):
@@ -293,10 +294,28 @@ class DefaultLoader:
             return
 
         self.load_opengl_function = lambda name: 0
+    def __del__(self):
+        # Cleanup Windows Headless Context
+        if self.extra and sys.platform.startswith('win'):
+            try:
+                from ctypes import windll
+                hwnd, hdc, rc = self.extra
+                if rc:
+                    windll.opengl32.wglMakeCurrent(0, 0)
+                    windll.opengl32.wglDeleteContext(rc)
+                if hdc and hwnd:
+                    windll.user32.ReleaseDC(hwnd, hdc)
+                if hwnd:
+                    windll.user32.DestroyWindow(hwnd)
+            except Exception:
+                pass
 
 def headless_context_windows():
     from ctypes import c_int, c_void_p, cast, windll, byref, Structure, sizeof
-    from ctypes.wintypes import WORD, DWORD, BYTE, HMODULE, LPCSTR, HWND, HDC, UINT, INT, BOOL, HGLRC, LPVOID
+    from ctypes.wintypes import WORD, DWORD, BYTE, HMODULE, LPCSTR, HWND, HDC, UINT, INT, BOOL, HANDLE, LPVOID
+    
+    # HGLRC is not in wintypes, usually it's just a HANDLE
+    HGLRC = HANDLE
 
     kernel32 = windll.kernel32
     user32 = windll.user32
@@ -401,6 +420,7 @@ def headless_context_windows():
     user32.ReleaseDC(hwnd, hdc)
     user32.DestroyWindow(hwnd)
 
+    # --- REAL CONTEXT CREATION ---
     real_name = f"HyperGL_{os.getpid()}".encode()
     hwnd = create_window(real_name)
     if not hwnd:
@@ -408,6 +428,7 @@ def headless_context_windows():
     hdc = user32.GetDC(hwnd)
 
     if not wglChoosePixelFormatARB_addr or not wglCreateContextAttribsARB_addr:
+        # Fallback to old GL if ARB missing (unlikely on modern GPU)
         pf = gdi32.ChoosePixelFormat(hdc, byref(pfd))
         gdi32.SetPixelFormat(hdc, pf, byref(pfd))
         rc = opengl32.wglCreateContext(hdc)
@@ -460,15 +481,27 @@ def headless_context_windows():
     WGL_CONTEXT_PROFILE_MASK_ARB = 0x9126
     WGL_CONTEXT_CORE_PROFILE_BIT_ARB = 0x00000001
     
+    # --- REQUEST OPENGL 4.6 ---
     ctx_attribs = (c_int * 7)(
-        WGL_CONTEXT_MAJOR_VERSION_ARB, 3,
-        WGL_CONTEXT_MINOR_VERSION_ARB, 3,
+        WGL_CONTEXT_MAJOR_VERSION_ARB, 4,
+        WGL_CONTEXT_MINOR_VERSION_ARB, 6,
         WGL_CONTEXT_PROFILE_MASK_ARB, WGL_CONTEXT_CORE_PROFILE_BIT_ARB,
         0
     )
     
     rc = wglCreateContextAttribsARB(hdc, 0, ctx_attribs)
     if not rc:
+         # Fallback to 4.5 if 4.6 fails
+         ctx_attribs[3] = 5
+         rc = wglCreateContextAttribsARB(hdc, 0, ctx_attribs)
+    
+    if not rc:
+         # Fallback to 4.3 (Minimum for Compute)
+         ctx_attribs[3] = 3
+         rc = wglCreateContextAttribsARB(hdc, 0, ctx_attribs)
+
+    if not rc:
+         # Final Fallback to standard context (might be 1.1 or 3.3 compat)
          rc = opengl32.wglCreateContext(hdc)
          
     if not opengl32.wglMakeCurrent(hdc, rc):
@@ -818,6 +851,8 @@ def validate(interface, layout, resources, vertex_buffers, info):
     bound_attributes = set()
     bound_uniforms = set()
     bound_uniform_buffers = set()
+    bound_storage_buffers = set()
+
     uniform_binding_map = {}
     uniform_buffer_binding_map = {}
     attribute_map = {obj['location']: obj for obj in attributes}
@@ -827,6 +862,8 @@ def validate(interface, layout, resources, vertex_buffers, info):
     uniform_buffer_resources = {obj['binding']: obj for obj in resources if obj['type'] == 'uniform_buffer'}
     sampler_resources = {obj['binding']: obj for obj in resources if obj['type'] == 'sampler'}
     max_uniform_block_size = info['max_uniform_block_size']
+    max_ssbo_bindings = info.get('max_shader_storage_buffer_bindings', 8)
+
     for obj in uniform_buffers:
         if obj['size'] > max_uniform_block_size:
             name = obj['name']
@@ -906,8 +943,17 @@ def validate(interface, layout, resources, vertex_buffers, info):
             if image.samples != 1:
                 raise ValueError(f'Multisample images cannot be attached to "{name}" with binding {binding}')
             bound_uniforms.add(binding)
-        elif resource_type == 'storage_buffer':
-            pass 
+        elif resource_type == 'storage_buffer': 
+            buffer = obj.get('buffer', None)
+            if buffer is None:
+                raise ValueError(f'Storage buffer at binding {binding} has no buffer attached')
+            
+            if binding < 0 or binding >= max_ssbo_bindings:
+                 raise ValueError(f'Invalid storage buffer binding {binding} (Max: {max_ssbo_bindings})')
+
+            if binding in bound_storage_buffers:
+                raise ValueError(f'Duplicate storage buffer binding for binding {binding}')
+            bound_storage_buffers.add(binding)
         else:
             raise ValueError(f'Invalid resource type "{resource_type}"')
 

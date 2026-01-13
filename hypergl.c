@@ -928,15 +928,18 @@ static int load_gl(PyObject *loader)
     load(glGetProgramResourceName);
     load(glGetBufferParameteriv);
 
-    load(glGetTextureHandleARB);
-    load(glMakeTextureHandleResidentARB);
-    load(glMakeTextureHandleNonResidentARB);
-    load(glUniformHandleui64ARB);
-    load(glMultiDrawArraysIndirect);
-    load(glMultiDrawElementsIndirect);
+    #define load_optional(name) \
+        *(void **)&name = load_opengl_function(loader_function, #name);
 
-#undef load
-#undef check
+    load_optional(glGetTextureHandleARB);
+    load_optional(glMakeTextureHandleResidentARB);
+    load_optional(glMakeTextureHandleNonResidentARB);
+    load_optional(glMultiDrawArraysIndirect);
+    load_optional(glMultiDrawElementsIndirect);
+
+    #undef load
+    #undef load_optional
+    #undef check
 
     Py_DECREF(loader_function);
 
@@ -3029,20 +3032,66 @@ static int init_internal(ModuleState *module_state, PyObject *module_obj, PyObje
 
 static PyObject *meth_init(PyObject *self, PyObject *args, PyObject *kwargs)
 {
-    static char *keywords[] = {"loader", NULL};
+    static char *keywords[] = {"loader", "headless", NULL};
     PyObject *loader = Py_None;
+    int headless = 0;
 
     ModuleState *module_state = PyModule_GetState(self);
     if (!module_state) return NULL; 
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|O", keywords, &loader)) return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|Op", keywords, &loader, &headless)) return NULL;
 
     PyMutex_Lock(&module_state->setup_lock);
-    if (init_internal(module_state, self, loader) < 0) {
+    
+    // Resolve Loader
+    PyObject *new_loader = NULL;
+    
+    if (loader == Py_None) {
+        // If headless is requested on Windows, we MUST use the Python helper 
+        // because the internal C loader (module_obj) cannot create contexts.
+        int use_python_loader = 1;
+        
+        #ifdef _WIN64
+        if (!headless) {
+            use_python_loader = 0;
+        }
+        #endif
+
+        if (use_python_loader) {
+            // Call hypergl._hypergl.loader(headless=headless)
+            new_loader = PyObject_CallMethod(module_state->helper, "loader", "(i)", headless);
+        } else {
+            #ifdef _WIN64
+            new_loader = Py_NewRef(self); // Use self as loader
+            #else
+            new_loader = NULL; // Should not happen due to logic above
+            #endif
+        }
+    } else {
+        new_loader = Py_NewRef(loader);
+    }
+
+    if (!new_loader) {
+        PyMutex_Unlock(&module_state->setup_lock);
+        return NULL;
+    }
+
+    // Pass the resolved loader to the internal init logic
+    if (init_internal(module_state, self, new_loader) < 0) {
+         Py_DECREF(new_loader);
          PyMutex_Unlock(&module_state->setup_lock);
          if (!PyErr_Occurred()) PyErr_SetString(PyExc_RuntimeError, "Initialization failed");
          return NULL;
     }
+    
+    // init_internal consumed the reference to new_loader via module_state->default_loader
+    // but we decref here because init_internal did Py_NewRef(loader) logic internally?
+    // Wait, let's look at init_internal again.
+    // init_internal takes (state, module, loader).
+    // It calls Py_NewRef(loader). 
+    // So we own 'new_loader' here, we must DECREF it after init_internal is done with it.
+    Py_DECREF(new_loader);
+
     PyMutex_Unlock(&module_state->setup_lock);
     Py_RETURN_NONE;
 }
@@ -4659,6 +4708,59 @@ fail:
 
 // --- Buffer Object Methods ---
 
+static PyObject *Buffer_meth_write_texture_handle(Buffer *self, PyObject *args, PyObject *kwargs)
+{
+    static char *keywords[] = {"offset", "image", NULL};
+    PyObject *image_obj;
+    int offset;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "iO", keywords, &offset, &image_obj))
+        return NULL;
+
+    if (!PyObject_TypeCheck(image_obj, self->ctx->module_state->Image_type)) {
+        PyErr_SetString(PyExc_TypeError, "Argument must be an Image object");
+        return NULL;
+    }
+
+    Image *img = (Image *)image_obj;
+
+    // Auto-fetch handle if missing
+    if (img->bindless_handle == 0) {
+        if (!glGetTextureHandleARB) {
+            PyErr_SetString(PyExc_RuntimeError, "Bindless not supported");
+            return NULL;
+        }
+        PyMutex_Lock(&self->ctx->state_lock);
+        img->bindless_handle = glGetTextureHandleARB(img->image);
+        PyMutex_Unlock(&self->ctx->state_lock);
+        if (img->bindless_handle == 0) {
+            PyErr_SetString(PyExc_RuntimeError, "Failed to get texture handle");
+            return NULL;
+        }
+    }
+
+    if (offset < 0 || offset + sizeof(GLuint64) > (size_t)self->size) {
+        PyErr_SetString(PyExc_ValueError, "Offset out of bounds");
+        return NULL;
+    }
+
+    // Write handle
+    if (self->mapped_ptr) {
+        // If mapped (persistent SSBO), write directly
+        PyMutex_Lock(&self->ctx->state_lock);
+        *(GLuint64 *)((char *)self->mapped_ptr + offset) = img->bindless_handle;
+        PyMutex_Unlock(&self->ctx->state_lock);
+    } else {
+        // Otherwise use SubData
+        PyMutex_Lock(&self->ctx->state_lock);
+        glBindBuffer(self->target, self->buffer);
+        glBufferSubData(self->target, offset, sizeof(GLuint64), &img->bindless_handle);
+        PyMutex_Unlock(&self->ctx->state_lock);
+    }
+
+    Py_RETURN_NONE;
+}
+
 static PyObject *Buffer_meth_write(Buffer *self, PyObject *args, PyObject *kwargs)
 {
     static char *keywords[] = {"data", "offset", NULL};
@@ -5382,6 +5484,20 @@ static PyObject *Pipeline_meth_render_indirect(Pipeline *self, PyObject *args, P
         return NULL;
     }
 
+    // --- AZDO Check ---
+    if (self->index_type) {
+        if (!glMultiDrawElementsIndirect) {
+            PyErr_SetString(PyExc_RuntimeError, "glMultiDrawElementsIndirect not supported/loaded on this hardware.");
+            return NULL;
+        }
+    } else {
+        if (!glMultiDrawArraysIndirect) {
+            PyErr_SetString(PyExc_RuntimeError, "glMultiDrawArraysIndirect not supported/loaded on this hardware.");
+            return NULL;
+        }
+    }
+    // ------------------
+
     if (!PyObject_TypeCheck(buffer_obj, self->ctx->module_state->Buffer_type)) {
         PyErr_SetString(PyExc_TypeError, "buffer must be a Buffer object");
         return NULL;
@@ -5427,8 +5543,7 @@ static PyObject *Pipeline_meth_render_indirect(Pipeline *self, PyObject *args, P
         );
     }
 
-    // Unbind indirect buffer to avoid accidental state pollution? 
-    // Usually kept bound in heavy loops, but safe to unbind here.
+    // Unbind indirect buffer to avoid accidental state pollution
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
 
     PyMutex_Unlock(&self->ctx->state_lock);
@@ -5448,6 +5563,112 @@ static int Pipeline_set_viewport(Pipeline *self, PyObject *viewport, void *closu
         return -1;
     }
     return 0;
+}
+
+static PyObject *Context_meth_pack_indirect(Context *self, PyObject *args, PyObject *kwargs)
+{
+    static char *keywords[] = {"commands", "indexed", NULL};
+    PyObject *commands;
+    int indexed = 0;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|p", keywords, &commands, &indexed))
+        return NULL;
+
+    if (!PySequence_Check(commands)) {
+        PyErr_SetString(PyExc_TypeError, "commands must be a sequence (list/tuple)");
+        return NULL;
+    }
+
+    Py_ssize_t count = PySequence_Size(commands);
+    if (count == 0) {
+        return PyBytes_FromString("");
+    }
+
+    // Decide struct size
+    // DrawArraysIndirectCommand: 16 bytes
+    // DrawElementsIndirectCommand: 20 bytes (raw) -> usually padded to 20 or 24 or 32 depending on std430.
+    // However, GL_DRAW_INDIRECT_BUFFER expects tightly packed C-structs usually.
+    // Elements: count(4), instanceCount(4), firstIndex(4), baseVertex(4), baseInstance(4) = 20 bytes.
+    // Arrays: count(4), instanceCount(4), first(4), baseInstance(4) = 16 bytes.
+    
+    Py_ssize_t stride = indexed ? 20 : 16;
+    Py_ssize_t total_size = count * stride;
+    
+    PyObject *result_bytes = PyBytes_FromStringAndSize(NULL, total_size);
+    if (!result_bytes) return NULL;
+
+    char *ptr = PyBytes_AsString(result_bytes);
+    memset(ptr, 0, total_size);
+    
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        PyObject *cmd = PySequence_GetItem(commands, i);
+        if (!cmd || !PySequence_Check(cmd)) {
+            Py_XDECREF(cmd);
+            Py_DECREF(result_bytes);
+            PyErr_Format(PyExc_TypeError, "Command at index %zd is not a sequence", i);
+            return NULL;
+        }
+
+        // We expect 4 items for Arrays, 5 items for Elements
+        // If 4 items provided for Elements, we assume baseVertex=0
+        
+        uint32_t v[5] = {0, 0, 0, 0, 0};
+        int inputs = (int)PySequence_Size(cmd);
+        
+        for (int k = 0; k < inputs && k < 5; k++) {
+            PyObject *item = PySequence_GetItem(cmd, k);
+            if (v[k] > UINT32_MAX) {
+                PyErr_Format(PyExc_ValueError, "Value at index %d too large for 32-bit", k);
+                Py_DECREF(result_bytes);
+                return NULL;
+            }
+            v[k] = (uint32_t)PyLong_AsUnsignedLong(item);
+            Py_DECREF(item);
+        }
+        Py_DECREF(cmd);
+
+        if (indexed) {
+            // DrawElementsIndirectCommand
+            // count, instanceCount, firstIndex, baseVertex, baseInstance
+            // If user passed 4 args: count, instance, firstIndex, baseInstance (skip baseVertex)
+            // This maps strictly to the struct layout:
+            struct DrawElementsIndirectCommand {
+                uint32_t count;
+                uint32_t instanceCount;
+                uint32_t firstIndex;
+                int32_t  baseVertex;
+                uint32_t baseInstance;
+            } *cmd_struct = (void*)(ptr + (i * stride));
+
+            cmd_struct->count = v[0];
+            cmd_struct->instanceCount = v[1];
+            cmd_struct->firstIndex = v[2];
+            // If python tuple len 4, v[3] is baseInstance. If 5, v[3] is baseVertex.
+            if (inputs == 4) {
+                 cmd_struct->baseVertex = 0;
+                 cmd_struct->baseInstance = v[3];
+            } else {
+                 cmd_struct->baseVertex = (int32_t)v[3];
+                 cmd_struct->baseInstance = v[4];
+            }
+        } else {
+            // DrawArraysIndirectCommand
+            // count, instanceCount, first, baseInstance
+            struct DrawArraysIndirectCommand {
+                uint32_t count;
+                uint32_t instanceCount;
+                uint32_t first;
+                uint32_t baseInstance;
+            } *cmd_struct = (void*)(ptr + (i * stride));
+            
+            cmd_struct->count = v[0];
+            cmd_struct->instanceCount = v[1];
+            cmd_struct->first = v[2];
+            cmd_struct->baseInstance = v[3];
+        }
+    }
+
+    return result_bytes;
 }
 
 static PyObject *Context_meth_new_frame(Context *self, PyObject *args, PyObject *kwargs)
@@ -5685,32 +5906,116 @@ static PyObject *Context_get_loader(Context *self, void *closure)
 static PyObject *inspect_descriptor_set(DescriptorSet *set)
 {
     PyObject *res = PyList_New(0);
+
+    // 1. Uniform Buffers
     for (int i = 0; i < set->uniform_buffers.binding_count; ++i)
     {
-        if (set->uniform_buffers.binding[i].buffer)
+        Buffer *buf = set->uniform_buffers.binding[i].buffer;
+        if (buf)
         {
             PyObject *obj = Py_BuildValue(
                 "{sssisisisi}",
                 "type", "uniform_buffer",
                 "binding", i,
-                "buffer", set->uniform_buffers.binding[i].buffer->buffer,
+                "buffer_id", buf->buffer,
                 "offset", set->uniform_buffers.binding[i].offset,
-                "size", set->uniform_buffers.binding[i].size);
-            PyList_Append(res, obj);
+                "size", set->uniform_buffers.binding[i].size
+            );
+            if (PyList_Append(res, obj) < 0) {
+                Py_DECREF(obj);
+                Py_DECREF(res);
+                return NULL;
+            }
             Py_DECREF(obj);
         }
     }
-    for (int i = 0; i < set->samplers.binding_count; ++i)
+
+    // 2. Storage Buffers (SSBOs)
+    for (int i = 0; i < set->storage_buffers.binding_count; ++i)
     {
-        if (set->samplers.binding[i].sampler)
+        Buffer *buf = set->storage_buffers.binding[i].buffer;
+        if (buf)
         {
             PyObject *obj = Py_BuildValue(
-                "{sssisisi}",
+                "{sssisisisi}",
+                "type", "storage_buffer",
+                "binding", i,
+                "buffer_id", buf->buffer,
+                "offset", set->storage_buffers.binding[i].offset,
+                "size", set->storage_buffers.binding[i].size
+            );
+            if (PyList_Append(res, obj) < 0) {
+                Py_DECREF(obj);
+                Py_DECREF(res);
+                return NULL;
+            }
+            Py_DECREF(obj);
+        }
+    }
+
+    // 3. Samplers / Bindless Textures
+    for (int i = 0; i < set->samplers.binding_count; ++i)
+    {
+        Image *img = set->samplers.binding[i].image;
+        GLObject *samp = set->samplers.binding[i].sampler;
+
+        if (img)
+        {
+            // Gather Image Details
+            PyObject *handle_obj;
+            if (img->bindless_handle != 0) {
+                handle_obj = PyLong_FromUnsignedLongLong(img->bindless_handle);
+            } else {
+                Py_INCREF(Py_None);
+                handle_obj = Py_None;
+            }
+            // Determine dimensions based on type
+            // int d = (img->cubemap) ? 3 : (img->array ? 3 : 2);
+            PyObject *dims = Py_BuildValue("(iii)", img->width, img->height, img->array);
+
+            
+            int samp_id = samp ? samp->obj : 0;
+
+            PyObject *resident = img->is_resident ? Py_True : Py_False;
+            PyObject *target = PyLong_FromLong(img->target);
+
+            Py_INCREF(resident);
+
+            if (!dims) {
+                Py_DECREF(handle_obj);
+                Py_DECREF(resident);
+                Py_DECREF(target);
+                Py_DECREF(res);
+                return NULL;
+            }
+
+            PyObject *obj = Py_BuildValue(
+                "{sssisisi sOsOsOsOsO}",
                 "type", "sampler",
                 "binding", i,
-                "sampler", set->samplers.binding[i].sampler->obj,
-                "texture", set->samplers.binding[i].image->image);
-            PyList_Append(res, obj);
+                "sampler_id", samp_id,
+                "texture_id", img->image,
+                // Extra details
+                "handle", handle_obj,
+                "dimensions", dims,
+                "format", img->format, // The Python string/tuple stored in Image struct
+                "resident", resident,
+                "target", target
+            );
+            if (!obj) {
+                Py_DECREF(res);
+                return NULL;
+            }
+            Py_DECREF(handle_obj);
+            Py_DECREF(resident);
+            Py_DECREF(target);
+            
+            if (PyList_Append(res, obj) < 0) {
+                Py_DECREF(obj);
+                Py_DECREF(res);
+                return NULL;
+            }
+            Py_DECREF(dims);
             Py_DECREF(obj);
         }
     }
@@ -6102,6 +6407,7 @@ static void GLObject_dealloc(GLObject *self)
 
 static PyMethodDef Context_methods[] = {
     {"buffer", (PyCFunction)Context_meth_buffer, METH_VARARGS | METH_KEYWORDS, NULL},
+    {"pack_indirect", (PyCFunction)Context_meth_pack_indirect, METH_VARARGS | METH_KEYWORDS, NULL},
     {"image", (PyCFunction)Context_meth_image, METH_VARARGS | METH_KEYWORDS, NULL},
     {"pipeline", (PyCFunction)Context_meth_pipeline, METH_VARARGS | METH_KEYWORDS, NULL},
     {"compute", (PyCFunction)Context_meth_compute, METH_VARARGS | METH_KEYWORDS, NULL},
@@ -6131,6 +6437,7 @@ static PyMethodDef Buffer_methods[] = {
     {"map", (PyCFunction)Buffer_meth_map, METH_NOARGS, NULL},
     {"unmap", (PyCFunction)Buffer_meth_unmap, METH_NOARGS, NULL},
     {"bind", (PyCFunction)Buffer_meth_bind, METH_VARARGS, NULL},
+    {"write_texture_handle", (PyCFunction)Buffer_meth_write_texture_handle, METH_VARARGS | METH_KEYWORDS, NULL},
     {0},
 };
 

@@ -315,6 +315,12 @@ class Buffer:
         Only valid for buffers created with storage=True.
         """
         ...
+    def write_texture_handle(self, offset: int, image: Image) -> None:
+        """
+        Write a 64-bit bindless texture handle into the buffer at the specific offset.
+        Automatically retrieves or creates the handle from the Image object.
+        """
+        ...
 
 class Image:
     """
@@ -381,7 +387,6 @@ class Image:
         """
         ...
     
-    # --- ADD THESE METHODS ---
     def get_handle(self) -> int:
         """
         Get the 64-bit bindless texture handle (GL_ARB_bindless_texture).
@@ -614,15 +619,32 @@ class Context:
         """Trigger garbage collection of released GL objects."""
         ...
 
+    # --- Indirect Drawing Helper ---
+    def pack_indirect(self, commands: Iterable[Iterable[int]], indexed: bool = False) -> bytes:
+        """
+        Pack a list of draw commands into a binary bytes object suitable for an Indirect Draw Buffer.
+        
+        Args:
+            commands: A list of tuples/lists.
+                      If indexed=False: (count, instanceCount, first, baseInstance)
+                      If indexed=True:  (count, instanceCount, firstIndex, baseVertex, baseInstance)
+            indexed: Set True if packing commands for glMultiDrawElementsIndirect.
+            
+        Returns:
+            A bytes object containing the tightly packed C-structs.
+        """
+        ...
+
 # --- Module Level Functions ---
 
-def init(loader: ContextLoader | None = None):
+def init(loader: ContextLoader | None = None, headless: bool = False):
     """
     Initialize the HyperGL module.
     
     Args:
-        loader: A function (usually from glfw/sdl) that accepts a string name 
-                and returns an OpenGL function pointer address.
+        loader: A custom loader.
+        headless: If True, creates a hidden window/context (useful for servers/tests).
+                  Ignored if loader is provided.
     """
     ...
 
