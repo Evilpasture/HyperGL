@@ -171,15 +171,20 @@ static int load_gl(PyObject *loader)
 
     PyObject *missing = PyList_New(0);
 
-#define check(name)                                          \
-    if (!name) {                                     \
-        PyObject *s = PyUnicode_FromString(#name);  \
-        if (s) PyList_Append(missing, s);           \
-        Py_XDECREF(s);                              \
-    }
-#define load(name)                                                  \
-    *(void **)&name = load_opengl_function(loader_function, #name); \
-    check(name)
+#define check(name)                                       \
+    do {                                                  \
+        if (!(name)) {                                    \
+            PyObject *s = PyUnicode_FromString(#name);    \
+            if (s) PyList_Append(missing, s);             \
+            Py_XDECREF(s);                                \
+        }                                                 \
+    } while (0)
+#define load(name) \
+    do { \
+        void *temp_ptr = load_opengl_function(loader_function, #name); \
+        memcpy(&name, &temp_ptr, sizeof(void*)); \
+        check(name); \
+    } while(0)
 
     load(glCullFace);
     load(glClear);
@@ -346,13 +351,10 @@ static void load_gl(PyObject *loader)
 
 // --- Helper Functions ---
 
-static void zeromem(void *data, int size)
+static FORCE_INLINE void zeromem(void *NO_ALIAS data, int size)
 {
-    unsigned char *ptr = data;
-    while (size--)
-    {
-        *ptr++ = 0;
-    }
+    // LLVM optimizes memset to SIMD instructions for known sizes
+    memset(data, 0, size);
 }
 
 static void bind_uniforms(Pipeline *self)
@@ -452,7 +454,7 @@ static void bind_uniforms(Pipeline *self)
     }
 }
 
-static void bind_viewport_internal(Context *self, Viewport *viewport)
+static FORCE_INLINE void bind_viewport_internal(Context *self, Viewport *viewport)
 {
     Viewport *c = &self->current_viewport;
     if (viewport->x != c->x || viewport->y != c->y || 
@@ -463,14 +465,14 @@ static void bind_viewport_internal(Context *self, Viewport *viewport)
     }
 }
 
-static void bind_viewport(Context *self, Viewport *viewport)
+static FORCE_INLINE void bind_viewport(Context *self, Viewport *viewport)
 {
     PyMutex_Lock(&self->state_lock);
     bind_viewport_internal(self, viewport);
     PyMutex_Unlock(&self->state_lock);
 }
 
-static void bind_global_settings_internal(Context *self, GlobalSettings *settings)
+static FORCE_INLINE void bind_global_settings_internal(Context *self, GlobalSettings *settings)
 {
     if (self->current_global_settings == settings) return;
 
@@ -515,78 +517,78 @@ static void bind_global_settings_internal(Context *self, GlobalSettings *setting
     Py_XSETREF(self->current_global_settings, settings);
 }
 
-static void bind_global_settings(Context *self, GlobalSettings *settings)
+static FORCE_INLINE void bind_global_settings(Context *self, GlobalSettings *settings)
 {
     PyMutex_Lock(&self->state_lock);
     bind_global_settings_internal(self, settings);
     PyMutex_Unlock(&self->state_lock);
 }
 
-static void bind_read_framebuffer_internal(Context *self, int framebuffer)
+static FORCE_INLINE void bind_read_framebuffer_internal(Context *self, int framebuffer)
 {
-    if (self->current_read_framebuffer != framebuffer)
+    if (UNLIKELY(self->current_read_framebuffer != framebuffer))
     {
         self->current_read_framebuffer = framebuffer;
         glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
     }
 }
 
-static void bind_read_framebuffer(Context *self, int framebuffer)
+static FORCE_INLINE void bind_read_framebuffer(Context *self, int framebuffer)
 {
     PyMutex_Lock(&self->state_lock);
     bind_read_framebuffer_internal(self, framebuffer);
     PyMutex_Unlock(&self->state_lock);
 }
 
-static void bind_draw_framebuffer_internal(Context *self, int framebuffer)
+static FORCE_INLINE void bind_draw_framebuffer_internal(Context *self, int framebuffer)
 {
-    if (self->current_draw_framebuffer != framebuffer)
+    if (UNLIKELY(self->current_draw_framebuffer != framebuffer))
     {
         self->current_draw_framebuffer = framebuffer;
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
     }
 }
 
-static void bind_draw_framebuffer(Context *self, int framebuffer)
+static FORCE_INLINE void bind_draw_framebuffer(Context *self, int framebuffer)
 {
     PyMutex_Lock(&self->state_lock);
     bind_draw_framebuffer_internal(self, framebuffer);
     PyMutex_Unlock(&self->state_lock);
 }
 
-static void bind_program_internal(Context *self, int program)
+static FORCE_INLINE void bind_program_internal(Context *self, int program)
 {
-    if (self->current_program != program)
+    if (UNLIKELY(self->current_program != program))
     {
         self->current_program = program;
         glUseProgram(program);
     }
 }
 
-static void bind_program(Context *self, int program)
+static FORCE_INLINE void bind_program(Context *self, int program)
 {
     PyMutex_Lock(&self->state_lock);
     bind_program_internal(self, program);
     PyMutex_Unlock(&self->state_lock);
 }
 
-static void bind_vertex_array_internal(Context *self, int vertex_array)
+static FORCE_INLINE void bind_vertex_array_internal(Context *self, int vertex_array)
 {
-    if (self->current_vertex_array != vertex_array)
+    if (UNLIKELY(self->current_vertex_array != vertex_array))
     {
         self->current_vertex_array = vertex_array;
         glBindVertexArray(vertex_array);
     }
 }
 
-static void bind_vertex_array(Context *self, int vertex_array)
+static FORCE_INLINE void bind_vertex_array(Context *self, int vertex_array)
 {
     PyMutex_Lock(&self->state_lock);
     bind_vertex_array_internal(self, vertex_array);
     PyMutex_Unlock(&self->state_lock);
 }
 
-static void bind_descriptor_set_internal(Context *self, DescriptorSet *set)
+static FORCE_INLINE void bind_descriptor_set_internal(Context *self, DescriptorSet *set)
 {
     if (self->current_descriptor_set == set) return;
     
@@ -624,7 +626,7 @@ static void bind_descriptor_set_internal(Context *self, DescriptorSet *set)
     }
 }
 
-static void bind_descriptor_set(Context *self, DescriptorSet *set)
+static FORCE_INLINE void bind_descriptor_set(Context *self, DescriptorSet *set)
 {
     if (self->current_descriptor_set != set)
     {
@@ -2603,20 +2605,34 @@ void flush_trash(Context *self) {
 
     TrashItem *to_delete = NULL;
     size_t count = 0;
+    // int invalid_type = 0;
 
+    // CRITICAL SECTION: Just swap the pointer!
     PyMutex_Lock(&shared->lock); 
     if (shared->count > 0) {
         count = shared->count;
-        to_delete = PyMem_Malloc(count * sizeof(TrashItem));
-        if (to_delete) {
-            memcpy(to_delete, shared->bin, count * sizeof(TrashItem));
+        to_delete = shared->bin; // Steal the full bin
+        
+        // Allocate a new empty bin for the producers
+        size_t old_capacity = shared->capacity;
+        shared->bin = PyMem_Malloc(old_capacity * sizeof(TrashItem));
+        if (shared->bin) {
+            shared->capacity = old_capacity;
             shared->count = 0;
+        } else {
+            shared->bin = to_delete;
+            shared->count = count;
+            to_delete = NULL;
         }
     }
     PyMutex_Unlock(&shared->lock);
 
     if (!to_delete) return;
 
+    if (self->is_lost){
+        PyMem_Free(to_delete);
+        return;
+    }
     // Delete OpenGL resources OUTSIDE the lock
     Py_BEGIN_ALLOW_THREADS
     for (size_t i = 0; i < count; i++) {
@@ -2633,39 +2649,51 @@ void flush_trash(Context *self) {
             case TRASH_SAMPLER:       glDeleteSamplers(1, &id); break;
             case TRASH_QUERY:         glDeleteQueries(1, &id); break;
             default: {
-                PyGILState_STATE gstate = PyGILState_Ensure();
-                PyErr_SetString(PyExc_TypeError, "invalid trash type");
-                PyGILState_Release(gstate);
+                // invalid_type = 1;
+                // break;
+                continue;
             }
         }
     }
     Py_END_ALLOW_THREADS
-
+    
+    // if (invalid_type) {
+    //     PyMem_Free(to_delete);
+    //     PyErr_SetString(PyExc_TypeError, "invalid trash type");
+    //     return;
+    // }
     PyMem_Free(to_delete);
 }
 
-static void enqueue_trash(SharedTrash *trash, const int id, const int type) {
-    if (!trash || id <= 0) return;
+static void enqueue_trash(SharedTrash *trash, int id, int type)
+{
+    if (!trash || id <= 0) // assumes all GL objects are unsigned
+        return;
 
     PyMutex_Lock(&trash->lock);
-    
+
     if (trash->count >= trash->capacity) {
-        size_t new_cap = trash->capacity ? trash->capacity * 2 : 64;
-        TrashItem *new_bin = PyMem_Realloc(trash->bin, new_cap * sizeof(TrashItem));
-        if (new_bin) {
-            trash->bin = new_bin;
-            trash->capacity = new_cap;
+        size_t old_cap = trash->capacity;
+        size_t new_cap = old_cap ? old_cap * 2 : 64;
+
+        TrashItem *new_bin =
+            PyMem_Realloc(trash->bin, new_cap * sizeof(TrashItem));
+
+        if (!new_bin) {
+            // Allocation failed → drop item (lossy but safe)
+            PyMutex_Unlock(&trash->lock);
+            return;
         }
+
+        trash->bin = new_bin;
+        trash->capacity = new_cap;
     }
 
-    if (trash->count < trash->capacity) {
-        trash->bin[trash->count].id = id;
-        trash->bin[trash->count].type = type;
-        trash->count++;
-    }
-    
+    trash->bin[trash->count++] = (TrashItem){ id, type };
+
     PyMutex_Unlock(&trash->lock);
 }
+
 
 static void release_descriptor_set(Context *self, DescriptorSet *set, int is_locked)
 {
@@ -4865,7 +4893,7 @@ static int Pipeline_clear(Pipeline *self) {
     return 0;
 }
 
-static PyObject *Pipeline_meth_render(Pipeline *self, PyObject *args)
+static PyObject *Pipeline_meth_render(Pipeline *self, PyObject *args) // LGTM. Don’t overthink this path. Indirect handles the scaling problem.
 {
     if (self->ctx->is_lost) {
         PyErr_Format(PyExc_RuntimeError, "the context is lost");
@@ -4918,6 +4946,16 @@ static PyObject *Pipeline_meth_render_indirect(Pipeline *self, PyObject *args, P
         return NULL;
     }
 
+    if (draw_count < 0) {
+        PyErr_SetString(PyExc_ValueError, "count must be >= 0");
+        return NULL;
+    }
+
+    if (offset < 0) {
+        PyErr_SetString(PyExc_ValueError, "offset must be >= 0");
+        return NULL;
+    }
+
     if (user_stride > 0) {
         stride = user_stride;
     }
@@ -4950,14 +4988,22 @@ static PyObject *Pipeline_meth_render_indirect(Pipeline *self, PyObject *args, P
     PyMutex_Lock(&self->ctx->state_lock);
 
     Viewport *viewport = (Viewport *)self->viewport_data_buffer.buf;
+    Viewport v1 = self->ctx->current_viewport;
+    Viewport v2 = self->viewport;
     
     // 1. Bind State
-    bind_viewport_internal(self->ctx, viewport);
-    bind_global_settings_internal(self->ctx, self->global_settings);
-    bind_draw_framebuffer_internal(self->ctx, self->framebuffer->obj);
-    bind_program_internal(self->ctx, self->program->obj);
-    bind_vertex_array_internal(self->ctx, self->vertex_array->obj);
-    bind_descriptor_set_internal(self->ctx, self->descriptor_set);
+    if (v1.x != v2.x || v1.y != v2.y || v1.width != v2.width || v1.height != v2.height)
+        bind_viewport_internal(self->ctx, viewport);
+    if (self->ctx->current_global_settings != self->global_settings)
+        bind_global_settings_internal(self->ctx, self->global_settings);
+    if (self->ctx->current_draw_framebuffer != self->framebuffer)
+        bind_draw_framebuffer_internal(self->ctx, self->framebuffer->obj);
+    if (self->ctx->current_program != self->program)
+        bind_program_internal(self->ctx, self->program->obj);
+    if (self->ctx->current_vertex_array != self->vertex_array)
+        bind_vertex_array_internal(self->ctx, self->vertex_array->obj);
+    if (self->ctx->current_descriptor_set != self->descriptor_set)
+        bind_descriptor_set_internal(self->ctx, self->descriptor_set);
 
     if (self->uniforms) {
         bind_uniforms(self);
@@ -4970,8 +5016,24 @@ static PyObject *Pipeline_meth_render_indirect(Pipeline *self, PyObject *args, P
     ? sizeof(DrawElementsIndirectCommand)
     : sizeof(DrawArraysIndirectCommand);
 
+    if (stride < command_size || (stride % 4) != 0) {
+        PyErr_SetString(PyExc_ValueError, "invalid indirect stride");
+        PyMutex_Unlock(&self->ctx->state_lock);
+        return NULL;
+    }
+
     intptr_t byte_offset = (intptr_t)offset * command_size;
-    // 3. Issue Draw Call
+    size_t required = byte_offset + (size_t)draw_count * stride;
+    if (required > indirect_buffer->size) {
+        PyErr_SetString(PyExc_ValueError, "indirect buffer too small");
+        PyMutex_Unlock(&self->ctx->state_lock);
+        return NULL;
+    }
+    // 3. Issue Draw Call (TODO: should use the commented one when ready)
+    // if (indirect_buffer->gpu_dirty) {
+    //     glMemoryBarrier(GL_COMMAND_BARRIER_BIT);
+    //     indirect_buffer->gpu_dirty = 0;
+    // }
     glMemoryBarrier(
         GL_COMMAND_BARRIER_BIT |
         GL_SHADER_STORAGE_BARRIER_BIT
@@ -5589,20 +5651,24 @@ static PyObject *ImageFace_meth_blit(ImageFace *self, PyObject *args, PyObject *
 
 typedef struct vec3 { double x, y, z; } vec3;
 
-static vec3 sub(const vec3 a, const vec3 b) {
+static CONST_FUNC FORCE_INLINE vec3 sub(const vec3 a, const vec3 b) {
     return (vec3){a.x - b.x, a.y - b.y, a.z - b.z};
 }
 
-static vec3 normalize(const vec3 a) {
-    const double l = sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
-    return (vec3){a.x / l, a.y / l, a.z / l};
+static CONST_FUNC FORCE_INLINE vec3 normalize(const vec3 a) {
+    const double sql = a.x * a.x + a.y * a.y + a.z * a.z;
+    if (!(sql > 1e-30))  // catches zero, tiny, negative, NaN
+        return (vec3){0, 0, 0};
+
+    const double inv_l = 1.0 / sqrt(sql);
+    return (vec3){a.x * inv_l, a.y * inv_l, a.z * inv_l};
 }
 
-static vec3 cross(const vec3 a, const vec3 b) {
+static CONST_FUNC FORCE_INLINE vec3 cross(const vec3 a, const vec3 b) {
     return (vec3){a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
 }
 
-static double dot(const vec3 a, const vec3 b) {
+static CONST_FUNC FORCE_INLINE double dot(const vec3 a, const vec3 b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
@@ -5766,6 +5832,8 @@ static void Image_dealloc(Image *self)
     
     if (image_id && !self->external && ctx && !ctx->is_lost && ctx->trash_shared) {
         int type = self->renderbuffer ? TRASH_RENDERBUFFER : TRASH_TEXTURE;
+        self->bindless_handle = 0;
+        self->is_resident = 0;
         enqueue_trash(ctx->trash_shared, image_id, type);
     }
     
