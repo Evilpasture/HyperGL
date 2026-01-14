@@ -3665,6 +3665,11 @@ static PyObject *Image_meth_get_handle(Image *self, PyObject *args)
 
 static PyObject *Image_meth_make_resident(Image *self, PyObject *args)
 {
+    if (self->ctx->is_lost) {
+        PyErr_SetString(PyExc_RuntimeError, "context lost");
+        return NULL;
+    }
+
     int resident = 1; // Default True
     if (!PyArg_ParseTuple(args, "|p", &resident)) return NULL;
 
@@ -3676,10 +3681,16 @@ static PyObject *Image_meth_make_resident(Image *self, PyObject *args)
     PyMutex_Lock(&self->ctx->state_lock);
     if (resident && !self->is_resident) {
         glMakeTextureHandleResidentARB(self->bindless_handle);
-        self->is_resident = 1;
+        if (glGetError() == GL_NO_ERROR)
+            self->is_resident = 1;
+        else
+            PyErr_SetString(PyExc_RuntimeError, "Failed to make texture handle resident");
     } else if (!resident && self->is_resident) {
         glMakeTextureHandleNonResidentARB(self->bindless_handle);
-        self->is_resident = 0;
+        if (glGetError() == GL_NO_ERROR)
+            self->is_resident = 0;
+        else
+            PyErr_SetString(PyExc_RuntimeError, "Failed to make texture handle non-resident");
     }
     PyMutex_Unlock(&self->ctx->state_lock);
     
@@ -5088,111 +5099,159 @@ static int Pipeline_set_viewport(Pipeline *self, PyObject *viewport, void *closu
     return 0;
 }
 
-static PyObject *Context_meth_pack_indirect(Context *self, PyObject *args, PyObject *kwargs)
+static PyObject *
+Context_meth_pack_indirect(Context *self, PyObject *args, PyObject *kwargs)
 {
     static char *keywords[] = {"commands", "indexed", NULL};
     PyObject *commands;
     int indexed = 0;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|p", keywords, &commands, &indexed))
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|p",
+                                    keywords, &commands, &indexed))
         return NULL;
 
     if (!PySequence_Check(commands)) {
-        PyErr_SetString(PyExc_TypeError, "commands must be a sequence (list/tuple)");
+        PyErr_SetString(PyExc_TypeError, "commands must be a sequence");
         return NULL;
     }
 
     Py_ssize_t count = PySequence_Size(commands);
-    if (count == 0) {
-        return PyBytes_FromString("");
-    }
+    if (count < 0)
+        return NULL;
 
-    // Decide struct size
-    // DrawArraysIndirectCommand: 16 bytes
-    // DrawElementsIndirectCommand: 20 bytes (raw) -> usually padded to 20 or 24 or 32 depending on std430.
-    // However, GL_DRAW_INDIRECT_BUFFER expects tightly packed C-structs usually.
-    // Elements: count(4), instanceCount(4), firstIndex(4), baseVertex(4), baseInstance(4) = 20 bytes.
-    // Arrays: count(4), instanceCount(4), first(4), baseInstance(4) = 16 bytes.
-    
-    Py_ssize_t stride = indexed ? 20 : 16;
-    Py_ssize_t total_size = count * stride;
-    
-    PyObject *result_bytes = PyBytes_FromStringAndSize(NULL, total_size);
-    if (!result_bytes) return NULL;
+    if (count == 0)
+        return PyBytes_FromStringAndSize("", 0);
 
-    char *ptr = PyBytes_AsString(result_bytes);
+    const Py_ssize_t stride = indexed ? 20 : 16;
+    const Py_ssize_t total_size = count * stride;
+
+    PyObject *result = PyBytes_FromStringAndSize(NULL, total_size);
+    if (!result)
+        return NULL;
+
+    unsigned char *ptr = (unsigned char *)PyBytes_AsString(result);
     memset(ptr, 0, total_size);
-    
-    for (Py_ssize_t i = 0; i < count; ++i) {
+
+    for (Py_ssize_t i = 0; i < count; i++) {
         PyObject *cmd = PySequence_GetItem(commands, i);
-        if (!cmd || !PySequence_Check(cmd)) {
-            Py_XDECREF(cmd);
-            Py_DECREF(result_bytes);
-            PyErr_Format(PyExc_TypeError, "Command at index %zd is not a sequence", i);
+        if (!cmd) {
+            Py_DECREF(result);
             return NULL;
         }
 
-        // We expect 4 items for Arrays, 5 items for Elements
-        // If 4 items provided for Elements, we assume baseVertex=0
-        
-        uint32_t v[5] = {0, 0, 0, 0, 0};
-        int inputs = (int)PySequence_Size(cmd);
-        
-        for (int k = 0; k < inputs && k < 5; k++) {
-            PyObject *item = PySequence_GetItem(cmd, k);
-            if (v[k] > UINT32_MAX) {
-                PyErr_Format(PyExc_ValueError, "Value at index %d too large for 32-bit", k);
-                Py_DECREF(result_bytes);
-                return NULL;
-            }
-            v[k] = (uint32_t)PyLong_AsUnsignedLong(item);
-            Py_DECREF(item);
+        if (!PySequence_Check(cmd)) {
+            Py_DECREF(cmd);
+            Py_DECREF(result);
+            PyErr_Format(PyExc_TypeError,
+                         "Command at index %zd is not a sequence", i);
+            return NULL;
         }
-        Py_DECREF(cmd);
+
+        Py_ssize_t inputs = PySequence_Size(cmd);
+        if (inputs < 0) {
+            Py_DECREF(cmd);
+            Py_DECREF(result);
+            return NULL;
+        }
 
         if (indexed) {
-            // DrawElementsIndirectCommand
-            // count, instanceCount, firstIndex, baseVertex, baseInstance
-            // If user passed 4 args: count, instance, firstIndex, baseInstance (skip baseVertex)
-            // This maps strictly to the struct layout:
+            if (inputs != 4 && inputs != 5) {
+                Py_DECREF(cmd);
+                Py_DECREF(result);
+                PyErr_Format(PyExc_ValueError,
+                             "Indexed command %zd must have 4 or 5 values", i);
+                return NULL;
+            }
+        } else {
+            if (inputs != 4) {
+                Py_DECREF(cmd);
+                Py_DECREF(result);
+                PyErr_Format(PyExc_ValueError,
+                             "Non-indexed command %zd must have exactly 4 values", i);
+                return NULL;
+            }
+        }
+
+        uint32_t u[5] = {0};
+        int32_t baseVertex = 0;
+
+        for (Py_ssize_t k = 0; k < inputs; k++) {
+            PyObject *item = PySequence_GetItem(cmd, k);
+            if (!item) {
+                Py_DECREF(cmd);
+                Py_DECREF(result);
+                return NULL;
+            }
+
+            if (indexed && inputs == 5 && k == 3) {
+                long v = PyLong_AsLong(item);
+                Py_DECREF(item);
+                if (PyErr_Occurred()) {
+                    Py_DECREF(cmd);
+                    Py_DECREF(result);
+                    return NULL;
+                }
+                if (v < INT32_MIN || v > INT32_MAX) {
+                    Py_DECREF(cmd);
+                    Py_DECREF(result);
+                    PyErr_SetString(PyExc_ValueError,
+                                    "baseVertex out of int32 range");
+                    return NULL;
+                }
+                baseVertex = (int32_t)v;
+            } else {
+                unsigned long v = PyLong_AsUnsignedLong(item);
+                Py_DECREF(item);
+                if (PyErr_Occurred()) {
+                    Py_DECREF(cmd);
+                    Py_DECREF(result);
+                    return NULL;
+                }
+                if (v > UINT32_MAX) {
+                    Py_DECREF(cmd);
+                    Py_DECREF(result);
+                    PyErr_SetString(PyExc_ValueError,
+                                    "Value out of uint32 range");
+                    return NULL;
+                }
+                u[k] = (uint32_t)v;
+            }
+        }
+
+        if (indexed) {
             struct DrawElementsIndirectCommand {
                 uint32_t count;
                 uint32_t instanceCount;
                 uint32_t firstIndex;
                 int32_t  baseVertex;
                 uint32_t baseInstance;
-            } *cmd_struct = (void*)(ptr + (i * stride));
+            } *out = (void *)(ptr + i * stride);
 
-            cmd_struct->count = v[0];
-            cmd_struct->instanceCount = v[1];
-            cmd_struct->firstIndex = v[2];
-            // If python tuple len 4, v[3] is baseInstance. If 5, v[3] is baseVertex.
-            if (inputs == 4) {
-                 cmd_struct->baseVertex = 0;
-                 cmd_struct->baseInstance = v[3];
-            } else {
-                 cmd_struct->baseVertex = (int32_t)v[3];
-                 cmd_struct->baseInstance = v[4];
-            }
+            out->count         = u[0];
+            out->instanceCount = u[1];
+            out->firstIndex    = u[2];
+            out->baseVertex    = (inputs == 5) ? baseVertex : 0;
+            out->baseInstance  = (inputs == 5) ? u[4] : u[3];
         } else {
-            // DrawArraysIndirectCommand
-            // count, instanceCount, first, baseInstance
             struct DrawArraysIndirectCommand {
                 uint32_t count;
                 uint32_t instanceCount;
                 uint32_t first;
                 uint32_t baseInstance;
-            } *cmd_struct = (void*)(ptr + (i * stride));
-            
-            cmd_struct->count = v[0];
-            cmd_struct->instanceCount = v[1];
-            cmd_struct->first = v[2];
-            cmd_struct->baseInstance = v[3];
+            } *out = (void *)(ptr + i * stride);
+
+            out->count         = u[0];
+            out->instanceCount = u[1];
+            out->first         = u[2];
+            out->baseInstance  = u[3];
         }
+
+        Py_DECREF(cmd);
     }
 
-    return result_bytes;
+    return result;
 }
+
 
 static PyObject *Context_meth_new_frame(Context *self, PyObject *args, PyObject *kwargs)
 {
