@@ -2,7 +2,7 @@
 #define HYPERGL_DEFS_H
 
 #include <Python.h>
-#include <structmember.h>
+
 
 
 // --- Compiler Hints ---
@@ -13,6 +13,7 @@
     #define NO_ALIAS    __restrict
     #define PURE_FUNC   __attribute__((pure))
     #define CONST_FUNC  __attribute__((const))
+    #define UNUSED __attribute__((unused))
 #else
     #define LIKELY(x)   (x)
     #define UNLIKELY(x) (x)
@@ -20,6 +21,7 @@
     #define NO_ALIAS
     #define PURE_FUNC
     #define CONST_FUNC
+    #define UNUSED
 #endif
 
 // --- Python 3.13+ Lock Shim ---
@@ -665,7 +667,14 @@ typedef unsigned char GLboolean;
     #define GL_SHADER_STORAGE_BARRIER_BIT      0x00002000
 #endif
 
+#ifndef GLenum
 typedef unsigned int GLenum;
+#endif
+
+#ifndef GLuint
+typedef unsigned int GLuint;
+#endif
+
 #define GL_NO_ERROR 0
 
 #endif // HYPERGL_DEFS_H

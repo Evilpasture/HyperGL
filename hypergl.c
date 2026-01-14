@@ -3,6 +3,7 @@
 // Copyright (c) 2024 Szabolcs Dombi
 
 #include "hypergl_defs.h"
+#include <structmember.h> // Required for T_INT, T_OBJECT_EX, etc.
 
 #ifndef EXTERN_GL
     // This defines a static function pointer with the correct calling convention
@@ -30,14 +31,14 @@ RESOLVE(void, glViewport, int, int, int, int);
 RESOLVE(void, glTexSubImage2D, int, int, int, int, int, int, int, int, const void *);
 RESOLVE(void, glBindTexture, int, int);
 RESOLVE(void, glDeleteTextures, int, const unsigned int *);
-RESOLVE(void, glGenTextures, int, int *);
+RESOLVE(void, glGenTextures, int, GLuint *);
 RESOLVE(void, glTexImage3D, int, int, int, int, int, int, int, int, int, const void *);
 RESOLVE(void, glTexSubImage3D, int, int, int, int, int, int, int, int, int, int, const void *);
 RESOLVE(void, glActiveTexture, int);
 RESOLVE(void, glBlendFuncSeparate, int, int, int, int);
 RESOLVE(void, glBindBuffer, int, int);
 RESOLVE(void, glDeleteBuffers, int, const unsigned int *);
-RESOLVE(void, glGenBuffers, int, int *);
+RESOLVE(void, glGenBuffers, int, GLuint *);
 RESOLVE(void, glBufferData, int, intptr, const void *, int);
 RESOLVE(void, glBufferStorage, int, intptr, const void *, int);
 RESOLVE(void, glBufferSubData, int, intptr, intptr, const void *);
@@ -98,7 +99,7 @@ RESOLVE(void, glClearBufferfv, int, int, const void *);
 RESOLVE(void, glClearBufferfi, int, int, float, int);
 RESOLVE(void, glBindRenderbuffer, int, int);
 RESOLVE(void, glDeleteRenderbuffers, int, const unsigned int *);
-RESOLVE(void, glGenRenderbuffers, int, int *);
+RESOLVE(void, glGenRenderbuffers, int, GLuint *);
 RESOLVE(void, glBindFramebuffer, int, int);
 RESOLVE(void, glDeleteFramebuffers, int, const unsigned int *);
 RESOLVE(void, glGenFramebuffers, int, int *);
@@ -117,9 +118,9 @@ RESOLVE(void, glCopyBufferSubData, int, int, intptr, intptr, intptr);
 RESOLVE(int, glGetUniformBlockIndex, int, const char *);
 RESOLVE(void, glGetActiveUniformBlockiv, int, int, int, int *);
 RESOLVE(void, glGetActiveUniformBlockName, int, int, int, int *, char *);
-RESOLVE(void, glUniformBlockBinding, int, int, int);
+RESOLVE(void, glUniformBlockBinding, GLuint, GLuint, GLuint);
 RESOLVE(void, glGenSamplers, int, int *);
-RESOLVE(void, glDeleteSamplers, int, const unsigned int *);
+RESOLVE(void, glDeleteSamplers, int, const GLuint *);
 RESOLVE(void, glBindSampler, int, int);
 RESOLVE(void, glSamplerParameteri, int, int, int);
 RESOLVE(void, glSamplerParameterf, int, int, float);
@@ -139,7 +140,7 @@ RESOLVE(void, glGetBufferParameteriv, unsigned int, unsigned int, int *);
 RESOLVE(GLuint64, glGetTextureHandleARB, int);
 RESOLVE(void, glMakeTextureHandleResidentARB, GLuint64);
 RESOLVE(void, glMakeTextureHandleNonResidentARB, GLuint64);
-RESOLVE(void, glUniformHandleui64ARB, int, GLuint64); // Optional, for direct uniform setting
+// RESOLVE(void, glUniformHandleui64ARB, int, GLuint64); // Optional, for direct uniform setting
 RESOLVE(void, glMultiDrawArraysIndirect, int, const void *, int, int);
 RESOLVE(void, glMultiDrawElementsIndirect, int, int, const void *, int, int);
 
@@ -182,7 +183,7 @@ static int load_gl(PyObject *loader)
 #define load(name) \
     do { \
         void *temp_ptr = load_opengl_function(loader_function, #name); \
-        memcpy(&name, &temp_ptr, sizeof(void*)); \
+        memcpy((void *)&name, (const void *)&temp_ptr, sizeof(void*)); \
         check(name); \
     } while(0)
 
@@ -357,7 +358,7 @@ static FORCE_INLINE void zeromem(void *NO_ALIAS data, int size)
     memset(data, 0, size);
 }
 
-static void bind_uniforms(Pipeline *self)
+static void bind_uniforms(const Pipeline *self)
 {
     const UniformHeader *const header = (UniformHeader *)self->uniform_layout_buffer.buf;
     const char *const data = (char *)self->uniform_data_buffer.buf;
@@ -454,7 +455,7 @@ static void bind_uniforms(Pipeline *self)
     }
 }
 
-static FORCE_INLINE void bind_viewport_internal(Context *self, Viewport *viewport)
+static FORCE_INLINE void bind_viewport_internal(Context *self, const Viewport *viewport)
 {
     Viewport *c = &self->current_viewport;
     if (viewport->x != c->x || viewport->y != c->y || 
@@ -465,7 +466,7 @@ static FORCE_INLINE void bind_viewport_internal(Context *self, Viewport *viewpor
     }
 }
 
-static FORCE_INLINE void bind_viewport(Context *self, Viewport *viewport)
+UNUSED static FORCE_INLINE void bind_viewport(Context *self, const Viewport *viewport)
 {
     PyMutex_Lock(&self->state_lock);
     bind_viewport_internal(self, viewport);
@@ -517,7 +518,7 @@ static FORCE_INLINE void bind_global_settings_internal(Context *self, GlobalSett
     Py_XSETREF(self->current_global_settings, settings);
 }
 
-static FORCE_INLINE void bind_global_settings(Context *self, GlobalSettings *settings)
+UNUSED static FORCE_INLINE void bind_global_settings(Context *self, GlobalSettings *settings)
 {
     PyMutex_Lock(&self->state_lock);
     bind_global_settings_internal(self, settings);
@@ -866,7 +867,7 @@ static int count_mipmaps(int width, int height)
 }
 
 
-static void remove_dict_value(PyObject *dict, PyObject *obj)
+static void remove_dict_value(PyObject *dict, const PyObject *obj)
 {
     PyObject *key = NULL;
     PyObject *value = NULL;
@@ -886,7 +887,7 @@ static PyObject *new_ref(void *obj)
     return Py_XNewRef((PyObject *)obj);
 }
 
-static int valid_mem(PyObject *mem, Py_ssize_t size)
+UNUSED static int valid_mem(PyObject *mem, const Py_ssize_t size)
 {
     if (!PyMemoryView_Check(mem))
     {
@@ -897,12 +898,12 @@ static int valid_mem(PyObject *mem, Py_ssize_t size)
     {
         return 0;
     }
-    int mem_size = (int)view.len;
+    const int mem_size = (int)view.len;
     PyBuffer_Release(&view);
     return size < 0 || mem_size == size;
 }
 
-static int to_int_pair(IntPair *value, PyObject *obj, int x, int y)
+static int to_int_pair(IntPair *value, PyObject *obj, const int x, const int y)
 {
     if (obj != Py_None)
     {
@@ -926,7 +927,7 @@ static int to_int_pair(IntPair *value, PyObject *obj, int x, int y)
     return 1;
 }
 
-static int to_viewport(Viewport *value, PyObject *obj, int x, int y, int width, int height)
+static int to_viewport(Viewport *value, PyObject *obj, const int x, const int y, const int width, const int height)
 {
     if (obj != Py_None)
     {
@@ -965,7 +966,7 @@ static int GLObject_clear(GLObject *self) {
     return 0;
 }
 
-static int ImageFace_traverse(ImageFace *self, visitproc visit, void *arg)
+static int ImageFace_traverse(const ImageFace *self, visitproc visit, void *arg)
 {
     Py_VISIT(self->ctx);
     Py_VISIT(self->image);
@@ -984,7 +985,7 @@ static int ImageFace_clear(ImageFace *self)
 }
 
 // Helper for SharedTrash support
-static void gl_object_init(Context *ctx, GLObject *obj, int id, int type) {
+static void gl_object_init(const Context *ctx, GLObject *obj, const int id, const int type) {
     obj->obj = id;
     obj->type = type;
     obj->uses = 1;
@@ -1036,7 +1037,7 @@ static GLObject *build_framebuffer(Context *self, PyObject *attachments) // HAS 
     
     for (int i = 0; i < color_attachment_count; ++i)
     {
-        ImageFace *face = (ImageFace *)PyTuple_GetItem(color_attachments, i);
+        ImageFace *const face = (ImageFace *)PyTuple_GetItem(color_attachments, i);
         if (face->image->renderbuffer) {
             glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, GL_RENDERBUFFER, face->image->image);
         } else if (face->image->cubemap) {
@@ -1095,13 +1096,13 @@ static GLObject *build_framebuffer(Context *self, PyObject *attachments) // HAS 
     int set_status = PyDict_SetDefaultRef(self->framebuffer_cache, attachments, (PyObject *)res, &existing);
 
     if (set_status < 0) { // Error
-        glDeleteFramebuffers(1, &res->obj);
+        glDeleteFramebuffers(1, (const GLuint *)&res->obj);
         Py_DECREF(res);
         return NULL;
     }
 
     if (set_status > 0) {
-        glDeleteFramebuffers(1, &res->obj);
+        glDeleteFramebuffers(1, (const GLuint *)&res->obj);
         Py_DECREF(res);
         GLObject *winner = (GLObject *)existing;
         Atomic_Increment(&winner->uses);
@@ -1266,7 +1267,7 @@ static GLObject *build_sampler(Context *self, PyObject *params)
     GLObject *res = PyObject_GC_New(GLObject, self->module_state->GLObject_type);
     if (!res) {
         PyMutex_Lock(&self->state_lock);
-        glDeleteSamplers(1, (const unsigned int *)&sampler);
+        glDeleteSamplers(1, (const GLuint *)&sampler);
         PyMutex_Unlock(&self->state_lock);
         return NULL;
     }
@@ -1279,13 +1280,13 @@ static GLObject *build_sampler(Context *self, PyObject *params)
     int set_status = PyDict_SetDefaultRef(self->sampler_cache, params, (PyObject *)res, &existing);
 
     if (set_status < 0) {
-        glDeleteSamplers(1, &res->obj);
+        glDeleteSamplers(1, (const GLuint *)&res->obj);
         Py_DECREF(res);
         return NULL;
     }
 
     if (set_status == 1) {
-        glDeleteSamplers(1, &res->obj);
+        glDeleteSamplers(1, (const GLuint *)&res->obj);
         Py_DECREF(res);
         GLObject *winner = (GLObject *)existing;
         Atomic_Increment(&winner->uses);
@@ -1295,7 +1296,7 @@ static GLObject *build_sampler(Context *self, PyObject *params)
     return res;
 }
 
-static DescriptorSetBuffers build_descriptor_set_buffers(Context *self, PyObject *bindings)
+static DescriptorSetBuffers build_descriptor_set_buffers(const Context *self, PyObject *bindings)
 {
     DescriptorSetBuffers res;
     zeromem(&res, sizeof(res));
@@ -1504,7 +1505,7 @@ error_cleanup:
     return NULL;
 }
 
-static GlobalSettings *build_global_settings(Context *self, PyObject *settings)
+static GlobalSettings *build_global_settings(const Context *self, PyObject *settings)
 {
     PyObject *cache;
     if (PyDict_GetItemRef(self->global_settings_cache, settings, &cache) > 0)
@@ -1631,7 +1632,7 @@ static GLObject *compile_shader(Context *self, PyObject *pair)
         return NULL;
     }
 
-    glShaderSource(shader, 1, &src, NULL);
+    glShaderSource(shader, 1, (const void *)&src, NULL);
     glCompileShader(shader);
     glGetShaderiv(shader, GL_COMPILE_STATUS, &shader_compiled);
 
@@ -1783,7 +1784,7 @@ static GLObject *compile_compute_program(Context *self, PyObject *includes, PyOb
     PyObject *key = NULL;
     PyObject *temp_bytes = NULL;
     GLObject *res = NULL;
-    char *log_buffer = NULL;
+    // char *log_buffer = NULL;
     int shader = 0;
     int program = 0;
 
@@ -1821,7 +1822,7 @@ static GLObject *compile_compute_program(Context *self, PyObject *includes, PyOb
         goto cleanup;
     }
 
-    glShaderSource(shader, 1, &src, NULL);
+    glShaderSource(shader, 1, (const void *)&src, NULL);
     glCompileShader(shader);
 
     int compiled = 0;
@@ -2119,7 +2120,7 @@ static ImageFace *build_image_face(Image *self, PyObject *key) // HAS GC_TRACK
     return res;
 }
 
-static void clear_bound_image(Image *self)
+static void clear_bound_image(const Image *self)
 {
     // NOTE: Caller must hold self->ctx->state_lock
 
@@ -2160,10 +2161,12 @@ static void clear_bound_image(Image *self)
                             self->clear_value.clear_floats[0], 
                             self->clear_value.clear_ints[1]);
             break;
+        default:
+            break;
     }
 }
 
-static PyObject *blit_image_face(ImageFace *src, PyObject *target_arg, PyObject *offset_arg, PyObject *size_arg, PyObject *crop_arg, int filter)
+static PyObject *blit_image_face(const ImageFace *src, PyObject *target_arg, PyObject *offset_arg, PyObject *size_arg, PyObject *crop_arg, const int filter)
 {
     if (Py_TYPE(target_arg) == src->image->ctx->module_state->Image_type)
     {
@@ -2252,7 +2255,7 @@ static PyObject *blit_image_face(ImageFace *src, PyObject *target_arg, PyObject 
     Py_RETURN_NONE;
 }
 
-static int parse_size_and_offset(ImageFace *self, PyObject *size_arg, PyObject *offset_arg, IntPair *size, IntPair *offset)
+static int parse_size_and_offset(const ImageFace *self, PyObject *size_arg, PyObject *offset_arg, IntPair *size, IntPair *offset)
 {
     if (size_arg == Py_None && offset_arg != Py_None)
     {
@@ -2599,7 +2602,7 @@ static void safe_decref_list(Context *self, PyObject **list, int count, int is_l
 }
 
 // Flush Trash using SharedTrash (Thread-Safe)
-void flush_trash(Context *self) {
+void flush_trash(const Context *self) {
     SharedTrash *shared = self->trash_shared;
     if (!shared) return;
 
@@ -3198,7 +3201,7 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args, PyObject *kwar
     }
     else
     {
-        glGenBuffers(1, (unsigned int *)&buffer);
+        glGenBuffers(1, (GLuint *)&buffer);
         glBindBuffer(target, buffer);
         // SSBO
         if (target == GL_SHADER_STORAGE_BUFFER) { 
@@ -3241,7 +3244,7 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args, PyObject *kwar
     return res;
 }
 
-static PyObject * Buffer_meth_bind(Buffer *self, PyObject *args)
+static PyObject * Buffer_meth_bind(const Buffer *self, PyObject *args)
 {
     int unit;
     if (!PyArg_ParseTuple(args, "i", &unit))
@@ -3382,7 +3385,7 @@ static PyObject * Buffer_meth_unmap(Buffer *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
-static int Image_write_internal(Image *self, PyObject *data) { 
+static int Image_write_internal(const Image *self, PyObject *data) {
     if (self->ctx->is_lost) {
         PyErr_SetString(PyExc_RuntimeError, "the context is lost");
         return -1;
@@ -3464,7 +3467,7 @@ static int Image_write_internal(Image *self, PyObject *data) {
     return 0;
 }
 
-static int Image_traverse(Image *self, visitproc visit, void *arg) {
+static int Image_traverse(const Image *self, visitproc visit, void *arg) {
     Py_VISIT(self->ctx);
     Py_VISIT(self->size);
     Py_VISIT(self->format);
@@ -3533,11 +3536,11 @@ static Image *Context_meth_image(Context *self, PyObject *args, PyObject *kwargs
     if (external) {
         image = external;
     } else if (renderbuffer) {
-        glGenRenderbuffers(1, (unsigned int *)&image);
+        glGenRenderbuffers(1, (GLuint *)&image);
         glBindRenderbuffer(GL_RENDERBUFFER, image);
         glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples > 1 ? samples : 0, fmt.internal_format, width, height);
     } else {
-        glGenTextures(1, (unsigned int *)&image);
+        glGenTextures(1, (GLuint *)&image);
         glActiveTexture(self->default_texture_unit);
         glBindTexture(target, image);
         glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -3839,8 +3842,10 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
             int location = glGetUniformLocation(program->obj, name_str);
             if (location >= 0) glUniform1i(location, binding);
             else {
-                unsigned int index = glGetUniformBlockIndex(program->obj, name_str);
-                if (index != GL_INVALID_INDEX) glUniformBlockBinding(program->obj, index, binding);
+                GLuint index = glGetUniformBlockIndex(program->obj, name_str);
+                if (index != GL_INVALID_INDEX) {
+                    glUniformBlockBinding(program->obj, index, (GLuint)binding);
+                }
             }
         }
         bind_program_internal(self, prev_program);
@@ -3949,8 +3954,7 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
     }
 
     if (render_data == Py_None) {
-        Py_buffer view;
-        memset(&view, 0, sizeof(view));
+        Py_buffer view = {0};
         view.buf = (void*)&res->params;
         view.len = sizeof(RenderParameters);
         view.readonly = 0;
@@ -4170,7 +4174,7 @@ fail:
 
 // --- Buffer Object Methods ---
 
-static PyObject *Buffer_meth_write_texture_handle(Buffer *self, PyObject *args, PyObject *kwargs)
+static PyObject *Buffer_meth_write_texture_handle(const Buffer *self, PyObject *args, PyObject *kwargs)
 {
     static char *keywords[] = {"offset", "image", NULL};
     PyObject *image_obj;
@@ -4223,7 +4227,7 @@ static PyObject *Buffer_meth_write_texture_handle(Buffer *self, PyObject *args, 
     Py_RETURN_NONE;
 }
 
-static PyObject *Buffer_meth_write(Buffer *self, PyObject *args, PyObject *kwargs)
+static PyObject *Buffer_meth_write(const Buffer *self, PyObject *args, PyObject *kwargs)
 {
     static char *keywords[] = {"data", "offset", NULL};
     PyObject *data;
@@ -4457,7 +4461,7 @@ static BufferView *Buffer_meth_view(Buffer *self, PyObject *args, PyObject *kwar
 
 // --- Image Object Methods ---
 
-static PyObject *Image_meth_clear(Image *self, PyObject *args) {
+static PyObject *Image_meth_clear(const Image *self, PyObject *args) {
     if (self->ctx->is_lost) {
         PyErr_Format(PyExc_RuntimeError, "the context is lost");
         return NULL;
@@ -4501,7 +4505,7 @@ static PyObject *Image_meth_clear(Image *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
-static PyObject *Image_meth_write(Image *self, PyObject *args, PyObject *kwargs)
+static PyObject *Image_meth_write(const Image *self, PyObject *args, PyObject *kwargs)
 {
     static char *keywords[] = {"data", "size", "offset", "layer", "level", NULL};
 
@@ -4552,7 +4556,10 @@ static PyObject *Image_meth_write(Image *self, PyObject *args, PyObject *kwargs)
             ? (BufferView *)PyObject_CallMethod(data, "view", NULL) 
             : (BufferView *)Py_NewRef(data);
     } else {
-        if (!(mem = PyMemoryView_GetContiguous(data, PyBUF_READ, 'C'))) return NULL;
+        mem = PyMemoryView_GetContiguous(data, PyBUF_READ, 'C');
+        if (!mem) {
+            return NULL;
+        }
         if (PyObject_GetBuffer(mem, &view, PyBUF_SIMPLE)) { Py_DECREF(mem); return NULL; }
     }
 
@@ -4575,7 +4582,7 @@ static PyObject *Image_meth_write(Image *self, PyObject *args, PyObject *kwargs)
             glTexSubImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + layer, level, offset.x, offset.y, size.x, size.y, self->fmt.format, self->fmt.type, pixels);
         } else {
             for (int i = 0; i < 6; ++i) {
-                glTexSubImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, level, offset.x, offset.y, size.x, size.y, self->fmt.format, self->fmt.type, (char *)pixels + stride * i);
+                glTexSubImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, level, offset.x, offset.y, size.x, size.y, self->fmt.format, self->fmt.type, (char *)pixels + (size_t)stride * i);
             }
         }
     } else if (self->array) {
@@ -4599,7 +4606,7 @@ cleanup:
     return NULL;
 }
 
-static PyObject *Image_meth_mipmaps(Image *self, PyObject *args)
+static PyObject *Image_meth_mipmaps(const Image *self, PyObject *args)
 {
     if (self->renderbuffer) {
         PyErr_Format(PyExc_TypeError, "cannot generate mipmaps for renderbuffers");
@@ -4622,7 +4629,7 @@ static PyObject *Image_meth_mipmaps(Image *self, PyObject *args)
     Py_RETURN_NONE;
 }
 
-static PyObject *Image_meth_read(Image *self, PyObject *args, PyObject *kwargs)
+static PyObject *Image_meth_read(const Image *self, PyObject *args, PyObject *kwargs)
 {
     static char *keywords[] = {"size", "offset", "into", NULL};
 
@@ -4657,11 +4664,15 @@ static PyObject *Image_meth_read(Image *self, PyObject *args, PyObject *kwargs)
         }
 
         int write_size = size.x * size.y * self->fmt.pixel_size;
-        PyObject *res = PyBytes_FromStringAndSize(NULL, write_size * self->layer_count);
+        PyObject *res = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)write_size * self->layer_count);
         for (int i = 0; i < self->layer_count; ++i)
         {
             ImageFace *src = (ImageFace *)PyTuple_GetItem(self->layers, i);
-            PyObject *chunk = PyMemoryView_FromMemory(PyBytes_AsString(res) + write_size * i, write_size, PyBUF_WRITE);
+            PyObject *chunk = PyMemoryView_FromMemory(
+                PyBytes_AsString(res) + (size_t)write_size * i,
+                write_size,
+                PyBUF_WRITE
+            );
             PyObject *temp = read_image_face(src, size, offset, chunk);
             if (!temp)
             {
@@ -4678,7 +4689,7 @@ static PyObject *Image_meth_read(Image *self, PyObject *args, PyObject *kwargs)
     return read_image_face(first_layer, size, offset, into);
 }
 
-static PyObject *Image_meth_blit(Image *self, PyObject *args, PyObject *kwargs)
+static PyObject *Image_meth_blit(const Image *self, PyObject *args, PyObject *kwargs)
 {
     static char *keywords[] = {"target", "offset", "size", "crop", "filter", NULL};
 
@@ -4739,7 +4750,7 @@ static ImageFace *Image_meth_face(Image *self, PyObject *args, PyObject *kwargs)
     return res;
 }
 
-static PyObject *Image_get_clear_value(Image *self, void *closure)
+static PyObject *Image_get_clear_value(const Image *self, void *closure)
 {
     if (self->fmt.clear_type == 'x')
     {
@@ -4861,7 +4872,7 @@ static int Image_set_clear_value(Image *self, PyObject *value, void *closure)
 
 // --- Pipeline Object Methods ---
 
-static int Pipeline_traverse(Pipeline *self, visitproc visit, void *arg) {
+static int Pipeline_traverse(const Pipeline *self, visitproc visit, void *arg) {
     Py_VISIT(self->ctx);
     Py_VISIT(self->create_kwargs);
     Py_VISIT(self->descriptor_set);
@@ -4893,7 +4904,7 @@ static int Pipeline_clear(Pipeline *self) {
     return 0;
 }
 
-static PyObject *Pipeline_meth_render(Pipeline *self, PyObject *args) // LGTM. Don’t overthink this path. Indirect handles the scaling problem.
+static PyObject *Pipeline_meth_render(const Pipeline *self, PyObject *args) // LGTM. Don’t overthink this path. Indirect handles the scaling problem.
 {
     if (self->ctx->is_lost) {
         PyErr_Format(PyExc_RuntimeError, "the context is lost");
@@ -4928,7 +4939,7 @@ static PyObject *Pipeline_meth_render(Pipeline *self, PyObject *args) // LGTM. D
     Py_RETURN_NONE;
 }
 
-static PyObject *Pipeline_meth_render_indirect(Pipeline *self, PyObject *args, PyObject *kwargs)
+static PyObject *Pipeline_meth_render_indirect(const Pipeline *self, PyObject *args, PyObject *kwargs)
 {
     static char *keywords[] = {"buffer", "count", "offset", "stride", NULL};
     PyObject *buffer_obj;
@@ -4996,11 +5007,11 @@ static PyObject *Pipeline_meth_render_indirect(Pipeline *self, PyObject *args, P
         bind_viewport_internal(self->ctx, viewport);
     if (self->ctx->current_global_settings != self->global_settings)
         bind_global_settings_internal(self->ctx, self->global_settings);
-    if (self->ctx->current_draw_framebuffer != self->framebuffer)
+    if (self->ctx->current_draw_framebuffer != self->framebuffer->obj)
         bind_draw_framebuffer_internal(self->ctx, self->framebuffer->obj);
-    if (self->ctx->current_program != self->program)
+    if (self->ctx->current_program != self->program->obj)
         bind_program_internal(self->ctx, self->program->obj);
-    if (self->ctx->current_vertex_array != self->vertex_array)
+    if (self->ctx->current_vertex_array != self->vertex_array->obj)
         bind_vertex_array_internal(self->ctx, self->vertex_array->obj);
     if (self->ctx->current_descriptor_set != self->descriptor_set)
         bind_descriptor_set_internal(self->ctx, self->descriptor_set);
@@ -5038,13 +5049,13 @@ static PyObject *Pipeline_meth_render_indirect(Pipeline *self, PyObject *args, P
         GL_COMMAND_BARRIER_BIT |
         GL_SHADER_STORAGE_BARRIER_BIT
     );
-
+    const void *indirect_offset = (const void *)(uintptr_t)byte_offset;
     if (self->index_type) {
         // Indexed Draw
         glMultiDrawElementsIndirect(
             self->topology, 
             self->index_type, 
-            (const void *)(intptr_t)byte_offset, 
+            indirect_offset,
             draw_count, 
             stride
         );
@@ -5052,7 +5063,7 @@ static PyObject *Pipeline_meth_render_indirect(Pipeline *self, PyObject *args, P
         // Array Draw
         glMultiDrawArraysIndirect(
             self->topology, 
-            (const void *)(intptr_t)byte_offset, 
+            indirect_offset,
             draw_count, 
             stride
         );
@@ -5062,7 +5073,7 @@ static PyObject *Pipeline_meth_render_indirect(Pipeline *self, PyObject *args, P
     Py_RETURN_NONE;
 }
 
-static PyObject *Pipeline_get_viewport(Pipeline *self, void *closure)
+static PyObject *Pipeline_get_viewport(const Pipeline *self, void *closure)
 {
     return Py_BuildValue("(iiii)", self->viewport.x, self->viewport.y, self->viewport.width, self->viewport.height);
 }
@@ -5394,12 +5405,12 @@ static PyObject *Context_meth_release(Context *self, PyObject *arg)
     Py_RETURN_NONE;
 }
 
-static PyObject *Context_get_screen(Context *self, void *closure)
+static PyObject *Context_get_screen(const Context *self, void *closure)
 {
     return PyLong_FromLong(self->default_framebuffer->obj);
 }
 
-static int Context_set_screen(Context *self, PyObject *value, void *closure)
+static int Context_set_screen(const Context *self, PyObject *value, void *closure)
 {
     if (!PyLong_CheckExact(value))
     {
@@ -5410,12 +5421,12 @@ static int Context_set_screen(Context *self, PyObject *value, void *closure)
     return 0;
 }
 
-static PyObject *Context_get_loader(Context *self, void *closure)
+static PyObject *Context_get_loader(const Context *self, void *closure)
 {
     return new_ref(self->module_state->default_loader);
 }
 
-static PyObject *inspect_descriptor_set(DescriptorSet *set)
+static PyObject *inspect_descriptor_set(const DescriptorSet *set)
 {
     PyObject *res = PyList_New(0);
 
@@ -5580,7 +5591,7 @@ static PyObject *meth_inspect(PyObject *self, PyObject *arg)
     Py_RETURN_NONE;
 }
 
-static PyObject *ImageFace_meth_clear(ImageFace *self, PyObject *args)
+static PyObject *ImageFace_meth_clear(const ImageFace *self, PyObject *args)
 {
     if (self->ctx->is_lost) {
         PyErr_Format(PyExc_RuntimeError, "the context is lost");
@@ -5629,7 +5640,7 @@ static PyObject *ImageFace_meth_read(ImageFace *self, PyObject *args, PyObject *
     return read_image_face(self, size, offset, into);
 }
 
-static PyObject *ImageFace_meth_blit(ImageFace *self, PyObject *args, PyObject *kwargs)
+static PyObject *ImageFace_meth_blit(const ImageFace *self, PyObject *args, PyObject *kwargs)
 {
     static char *keywords[] = {"target", "offset", "size", "crop", "filter", NULL};
     PyObject *target = Py_None, *offset = Py_None, *size = Py_None, *crop = Py_None;
@@ -5759,7 +5770,7 @@ static void Context_dealloc(Context *self)
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
-static int Buffer_traverse(Buffer *self, visitproc visit, void *arg) {
+static int Buffer_traverse(const Buffer *self, visitproc visit, void *arg) {
     Py_VISIT(self->memoryview);
     Py_VISIT(self->ctx); 
     return 0;
