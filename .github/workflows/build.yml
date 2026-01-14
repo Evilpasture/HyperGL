@@ -12,8 +12,9 @@ jobs:
     name: Build wheels on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
+      # This ensures that even if Mac fails, Windows and Linux stay alive
+      fail-fast: false
       matrix:
-        # Keeping macOS for compatibility, but focusing on Win/Linux for 4.6 features
         os: [windows-latest, ubuntu-latest, macos-latest]
 
     steps:
@@ -23,31 +24,24 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          # Required to get the headers for 3.14t
           python-version: '3.14-dev'
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.21.3
         env:
-          # --- Free-Threaded Configuration ---
           CIBW_FREE_THREADED_SUPPORT: 1
-          
-          # --- Version Targeting ---
-          # This stops it from failing on old Python versions that don't have 't' builds
           CIBW_BUILD: "cp313t-* cp314t-*"
           
-          # --- Architecture Configuration ---
           CIBW_ARCHS_WINDOWS: "AMD64"
           CIBW_ARCHS_LINUX: "x86_64"
           CIBW_ARCHS_MACOS: "x86_64 arm64"
 
-          # --- Build Customizations ---
-          # CC/CXX helps hint to the runner to use clang-cl on Windows
-          CC: clang-cl
-          CXX: clang-cl
-          CIBW_ENVIRONMENT: >
-            HYPERGL_VALIDATE=1
-            DISABLE_LOCKS=0
+          # --- Platform-Specific Environments ---
+          # We define CC=clang-cl ONLY for Windows. 
+          # Linux and Mac will use their default 'cc' and 'clang'.
+          CIBW_ENVIRONMENT_WINDOWS: "CC=clang-cl CXX=clang-cl HYPERGL_VALIDATE=1 DISABLE_LOCKS=0"
+          CIBW_ENVIRONMENT_LINUX: "HYPERGL_VALIDATE=1 DISABLE_LOCKS=0"
+          CIBW_ENVIRONMENT_MACOS: "HYPERGL_VALIDATE=1 DISABLE_LOCKS=0"
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
