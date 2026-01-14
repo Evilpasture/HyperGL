@@ -5,7 +5,7 @@ import sys
 import sysconfig
 from setuptools import Extension, setup
 
-# Attempt to import tomllib (Python 3.11+) or toml (legacy)
+# --- Metadata Extraction ---
 try:
     import tomllib
 except ImportError:
@@ -13,6 +13,15 @@ except ImportError:
         import toml as tomllib
     except ImportError:
         tomllib = None
+
+version = "0.0.0"
+if tomllib:
+    try:
+        with open("pyproject.toml", "rb" if hasattr(tomllib, "load") else "r") as f:
+            data = tomllib.load(f)
+            version = data.get("project", {}).get("version", "0.0.0")
+    except Exception:
+        pass
 
 def find_llvm_clang():
     """Attempts to find the path to clang-cl.exe"""
@@ -23,24 +32,12 @@ def find_llvm_clang():
     potential_paths = [
         "C:\\Program Files\\LLVM\\bin\\clang-cl.exe",
         "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\Llvm\\x64\\bin\\clang-cl.exe",
-        "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\Llvm\\x64\\bin\\clang-cl.exe",
-        "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\VC\\Tools\\Llvm\\bin\\clang-cl.exe"
+        "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\Llvm\\x64\\bin\\clang-cl.exe"
     ]
-
     for path in potential_paths:
         if os.path.exists(path):
             return path
     return None
-
-# --- Metadata Extraction ---
-version = "0.0.0"
-if tomllib:
-    try:
-        with open("pyproject.toml", "rb" if hasattr(tomllib, "load") else "r") as f:
-            data = tomllib.load(f)
-            version = data.get("project", {}).get("version", "0.0.0")
-    except FileNotFoundError:
-        pass
 
 # --- Compiler Configuration ---
 extra_compile_args = []
@@ -48,52 +45,41 @@ extra_link_args = []
 define_macros = [('Py_GIL_DISABLED', '1'), ('HYPERGL_VERSION', f'"{version}"')]
 libraries = []
 
-clang_bin = find_llvm_clang()
-
 if sys.platform == 'win32':
-    # 1. FIX: Force x64 and basic flags
-    extra_compile_args += ['--target=x86_64-pc-windows-msvc', '/std:c11', '/O2', '/Zi']
+    # ARCH & STANDARDS: Force x64 and C11
+    # We use /clang: to pass flags if we are using clang-cl, otherwise cl.exe ignores them
+    clang_bin = find_llvm_clang()
+    if clang_bin:
+        extra_compile_args.append('/clang:--target=x86_64-pc-windows-msvc')
+    
+    extra_compile_args += ['/std:c11', '/O2', '/Zi']
     libraries += ['opengl32', 'user32', 'gdi32']
     
-    # 2. FIX: Explicitly find the library directory to avoid LNK1104
-    # On GitHub Runners, libs can be in sys.prefix/libs or in a nuget tools folder
-    py_lib_dir = os.path.join(sys.prefix, "libs")
-    if os.path.exists(py_lib_dir):
-        extra_link_args.append(f'/LIBPATH:{py_lib_dir}')
+    # Find the elusive .lib directory
+    # 'platlib' or 'base' + 'libs' usually works on Windows
+    py_lib_dir = os.path.join(sysconfig.get_config_var('base'), "libs")
+    if not os.path.exists(py_lib_dir):
+        # Fallback for some virtualenvs/GitHub-hosted versions
+        py_lib_dir = os.path.join(sys.prefix, "libs")
+        
+    extra_link_args += [f'/LIBPATH:{py_lib_dir}', '/MACHINE:X64']
 
-    # 3. FIX: Removed '/link' prefix. setuptools already knows it's calling the linker.
-    extra_link_args += ['/MACHINE:X64']
-
-    # 4. FIX: Dynamic NoDefaultLib based on current version (handles 3.13t and 3.14t)
+    # VERSION-AWARE NODEFAULTLIB
+    # This prevents the linker from looking for 'python314.lib' when it needs 'python314t.lib'
     ver_nodot = "".join(map(str, sys.version_info[:2]))
     extra_link_args.append(f'/NODEFAULTLIB:python{ver_nodot}.lib')
-
-    if clang_bin:
-        print(f"--- Using LLVM/Clang: {clang_bin}")
-        os.environ["CC"] = clang_bin
-        os.environ["CXX"] = clang_bin
-        try:
-            from setuptools import distutils
-            import distutils._msvccompiler as msvc
-            msvc.MSVCCompiler.cc = clang_bin
-            msvc.MSVCCompiler.linker = clang_bin
-        except ImportError:
-            print("--- Warning: Could not monkeypatch MSVCCompiler.")
 
 elif sys.platform.startswith('linux'):
     extra_compile_args += ['-std=c11', '-O3', '-fPIC']
 elif sys.platform.startswith('darwin'):
     extra_compile_args += ['-Wno-writable-strings', '-std=c11']
 
-# --- Custom Logic: Pyodide / WASM ---
-if os.getenv('PYODIDE') or str(sysconfig.get_config_var('HOST_GNU_TYPE')).startswith('wasm'):
-    try:
-        with open('hypergl.js') as hypergl_js:
-            code = re.sub(r'\s+', ' ', hypergl_js.read())
-            code = code.replace('"', '\\"') 
-            define_macros += [('EXTERN_GL', f'"{code}"')]
-    except FileNotFoundError:
-        print("--- Warning: hypergl.js not found for WASM build.")
+# --- Environment Toggles ---
+if os.getenv('HYPERGL_VALIDATE', '1') == '1':
+    define_macros.append(('ENABLE_VALIDATION', '1'))
+
+if os.getenv('DISABLE_LOCKS', '0') == '1':
+    define_macros.append(('DISABLE_LOCKS', '1'))
 
 # --- Extension Definition ---
 ext = Extension(

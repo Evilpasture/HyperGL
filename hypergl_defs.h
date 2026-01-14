@@ -23,20 +23,20 @@
     #define CONST_FUNC
     #define UNUSED
 #endif
-
 #ifdef UINT32_MAX
-#define UINT32_MAX (4294967295U)
+    #undef UINT32_MAX
+    #define UINT32_MAX (4294967295U)
 #endif
 
 #ifdef INT32_MAX
     #undef INT32_MAX
+    #define INT32_MAX 2147483647
 #endif
-#define INT32_MAX 2147483647
 
 #ifdef INT32_MIN
     #undef INT32_MIN
+    #define INT32_MIN (-2147483647 - 1)
 #endif
-#define INT32_MIN (-2147483647 - 1)
 
 // --- Python 3.13+ Lock Shim ---
 #ifndef Py_MOD_GIL_NOT_USED

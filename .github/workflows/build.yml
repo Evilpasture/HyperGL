@@ -13,8 +13,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        # Building for Windows and Linux (OpenGL 4.6 homes) 
-        # and macOS (OpenGL 4.1 home)
+        # Keeping macOS for compatibility, but focusing on Win/Linux for 4.6 features
         os: [windows-latest, ubuntu-latest, macos-latest]
 
     steps:
@@ -24,24 +23,28 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          # Using 3.14-dev for the free-threaded 't' builds
+          # Required to get the headers for 3.14t
           python-version: '3.14-dev'
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.21.3
         env:
-          # --- Free-Threaded (Python 3.13+) Configuration ---
+          # --- Free-Threaded Configuration ---
           CIBW_FREE_THREADED_SUPPORT: 1
           
+          # --- Version Targeting ---
+          # This stops it from failing on old Python versions that don't have 't' builds
+          CIBW_BUILD: "cp313t-* cp314t-*"
+          
           # --- Architecture Configuration ---
-          # Build for 64-bit on Windows/Linux
           CIBW_ARCHS_WINDOWS: "AMD64"
           CIBW_ARCHS_LINUX: "x86_64"
-          # Build for both Intel and Apple Silicon on Mac
           CIBW_ARCHS_MACOS: "x86_64 arm64"
 
           # --- Build Customizations ---
-          # Pass your environment variables to the compiler
+          # CC/CXX helps hint to the runner to use clang-cl on Windows
+          CC: clang-cl
+          CXX: clang-cl
           CIBW_ENVIRONMENT: >
             HYPERGL_VALIDATE=1
             DISABLE_LOCKS=0
@@ -52,7 +55,6 @@ jobs:
           name: hypergl-wheels-${{ matrix.os }}
           path: ./wheelhouse/*.whl
 
-  # Optional: Automatically attach wheels to a GitHub Release
   release:
     name: Release Wheels
     needs: [build_wheels]
