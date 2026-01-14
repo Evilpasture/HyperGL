@@ -2,6 +2,10 @@
 
 // Copyright (c) 2024 Szabolcs Dombi
 
+// -----------------------------------------------------------------------------
+// Includes & Macros
+// -----------------------------------------------------------------------------
+
 #include "hypergl_defs.h"
 #include <structmember.h> // Required for T_INT, T_OBJECT_EX, etc.
 
@@ -13,21 +17,27 @@
     #define RESOLVE(type, name, ...) extern type GL_API name(__VA_ARGS__) __asm__("hypergl_" #name)
 #endif
 
+// -----------------------------------------------------------------------------
+// OpenGL Function Pointers (RESOLVE)
+// -----------------------------------------------------------------------------
+
+// -- State Management & Clearing --
 RESOLVE(void, glCullFace, int);
 RESOLVE(void, glClear, int);
-RESOLVE(void, glTexParameteri, int, int, int);
-RESOLVE(void, glTexImage2D, int, int, int, int, int, int, int, int, const void *);
 RESOLVE(void, glDepthMask, int);
 RESOLVE(void, glDisable, int);
 RESOLVE(void, glEnable, int);
 RESOLVE(void, glFlush);
 RESOLVE(void, glDepthFunc, int);
-RESOLVE(void, glReadBuffer, int);
-RESOLVE(void, glReadPixels, int, int, int, int, int, int, void *);
-RESOLVE(int, glGetError);
 RESOLVE(void, glGetIntegerv, int, int *);
 RESOLVE(const char *, glGetString, int);
+RESOLVE(int, glGetError);
 RESOLVE(void, glViewport, int, int, int, int);
+RESOLVE(void, glPixelStorei, int, int);
+
+// -- Textures & Samplers --
+RESOLVE(void, glTexParameteri, int, int, int);
+RESOLVE(void, glTexImage2D, int, int, int, int, int, int, int, int, const void *);
 RESOLVE(void, glTexSubImage2D, int, int, int, int, int, int, int, int, const void *);
 RESOLVE(void, glBindTexture, int, int);
 RESOLVE(void, glDeleteTextures, int, const unsigned int *);
@@ -35,7 +45,17 @@ RESOLVE(void, glGenTextures, int, GLuint *);
 RESOLVE(void, glTexImage3D, int, int, int, int, int, int, int, int, int, const void *);
 RESOLVE(void, glTexSubImage3D, int, int, int, int, int, int, int, int, int, int, const void *);
 RESOLVE(void, glActiveTexture, int);
-RESOLVE(void, glBlendFuncSeparate, int, int, int, int);
+RESOLVE(void, glGenerateMipmap, int);
+RESOLVE(void, glGenSamplers, int, int *);
+RESOLVE(void, glDeleteSamplers, int, const GLuint *);
+RESOLVE(void, glBindSampler, int, int);
+RESOLVE(void, glSamplerParameteri, int, int, int);
+RESOLVE(void, glSamplerParameterf, int, int, float);
+RESOLVE(void, glBindImageTexture, int, int, int, int, int, int, int);
+
+// -- Buffers (VBO, UBO, SSBO) --
+RESOLVE(void, glReadBuffer, int);
+RESOLVE(void, glReadPixels, int, int, int, int, int, int, void *);
 RESOLVE(void, glBindBuffer, int, int);
 RESOLVE(void, glDeleteBuffers, int, const unsigned int *);
 RESOLVE(void, glGenBuffers, int, GLuint *);
@@ -43,11 +63,25 @@ RESOLVE(void, glBufferData, int, intptr, const void *, int);
 RESOLVE(void, glBufferStorage, int, intptr, const void *, int);
 RESOLVE(void, glBufferSubData, int, intptr, intptr, const void *);
 RESOLVE(void, glGetBufferSubData, int, intptr, intptr, void *);
+RESOLVE(void, glBindBufferRange, int, int, int, intptr, intptr);
+RESOLVE(void, glClearBufferiv, int, int, const void *);
+RESOLVE(void, glClearBufferuiv, int, int, const void *);
+RESOLVE(void, glClearBufferfv, int, int, const void *);
+RESOLVE(void, glClearBufferfi, int, int, float, int);
+RESOLVE(void, glCopyBufferSubData, int, int, intptr, intptr, intptr);
+RESOLVE(void, glBindBufferBase, int, int, int);
+RESOLVE(void *, glMapBufferRange, int, intptr, intptr, int);
+RESOLVE(int, glUnmapBuffer, int);
+RESOLVE(void, glGetBufferParameteriv, unsigned int, unsigned int, int *);
+
+// -- Blending & Stencil --
+RESOLVE(void, glBlendFuncSeparate, int, int, int, int);
 RESOLVE(void, glBlendEquationSeparate, int, int);
-RESOLVE(void, glDrawBuffers, int, const int *);
 RESOLVE(void, glStencilOpSeparate, int, int, int, int);
 RESOLVE(void, glStencilFuncSeparate, int, int, int, int);
 RESOLVE(void, glStencilMaskSeparate, int, int);
+
+// -- Shaders & Programs --
 RESOLVE(void, glAttachShader, int, int);
 RESOLVE(void, glDetachShader, int, int);
 RESOLVE(void, glCompileShader, int);
@@ -55,19 +89,34 @@ RESOLVE(int, glCreateProgram);
 RESOLVE(int, glCreateShader, int);
 RESOLVE(void, glDeleteProgram, unsigned int);
 RESOLVE(void, glDeleteShader, unsigned int);
-RESOLVE(void, glDeleteQueries, int, const unsigned int *);
-RESOLVE(void, glEnableVertexAttribArray, int);
-RESOLVE(void, glGetActiveAttrib, int, int, int, int *, int *, int *, char *);
-RESOLVE(void, glGetActiveUniform, int, int, int, int *, int *, int *, char *);
-RESOLVE(int, glGetAttribLocation, int, const char *);
 RESOLVE(void, glGetProgramiv, int, int, int *);
 RESOLVE(void, glGetProgramInfoLog, int, int, int *, char *);
 RESOLVE(void, glGetShaderiv, int, int, int *);
 RESOLVE(void, glGetShaderInfoLog, int, int, int *, char *);
-RESOLVE(int, glGetUniformLocation, int, const char *);
 RESOLVE(void, glLinkProgram, int);
 RESOLVE(void, glShaderSource, int, int, const void *, const int *);
 RESOLVE(void, glUseProgram, int);
+RESOLVE(void, glDispatchCompute, int, int, int);
+RESOLVE(void, glMemoryBarrier, int);
+RESOLVE(void, glGetProgramInterfaceiv, int, int, int, int *);
+RESOLVE(void, glGetProgramResourceiv, int, int, int, int, const int *, int, int *, int *);
+RESOLVE(void, glGetProgramResourceName, int, int, int, int, int *, char *);
+
+// -- Attributes & Uniforms --
+RESOLVE(void, glEnableVertexAttribArray, int);
+RESOLVE(void, glGetActiveAttrib, int, int, int, int *, int *, int *, char *);
+RESOLVE(void, glGetActiveUniform, int, int, int, int *, int *, int *, char *);
+RESOLVE(int, glGetAttribLocation, int, const char *);
+RESOLVE(int, glGetUniformLocation, int, const char *);
+RESOLVE(void, glVertexAttribPointer, int, int, int, int, int, intptr);
+RESOLVE(void, glVertexAttribIPointer, int, int, int, int, intptr);
+RESOLVE(void, glVertexAttribDivisor, int, int);
+RESOLVE(int, glGetUniformBlockIndex, int, const char *);
+RESOLVE(void, glGetActiveUniformBlockiv, int, int, int, int *);
+RESOLVE(void, glGetActiveUniformBlockName, int, int, int, int *, char *);
+RESOLVE(void, glUniformBlockBinding, GLuint, GLuint, GLuint);
+
+// -- Uniform Setting --
 RESOLVE(void, glUniform1i, int, int);
 RESOLVE(void, glUniform1fv, int, int, const void *);
 RESOLVE(void, glUniform2fv, int, int, const void *);
@@ -77,26 +126,21 @@ RESOLVE(void, glUniform1iv, int, int, const void *);
 RESOLVE(void, glUniform2iv, int, int, const void *);
 RESOLVE(void, glUniform3iv, int, int, const void *);
 RESOLVE(void, glUniform4iv, int, int, const void *);
+RESOLVE(void, glUniform1uiv, int, int, const void *);
+RESOLVE(void, glUniform2uiv, int, int, const void *);
+RESOLVE(void, glUniform3uiv, int, int, const void *);
+RESOLVE(void, glUniform4uiv, int, int, const void *);
 RESOLVE(void, glUniformMatrix2fv, int, int, int, const void *);
 RESOLVE(void, glUniformMatrix3fv, int, int, int, const void *);
 RESOLVE(void, glUniformMatrix4fv, int, int, int, const void *);
-RESOLVE(void, glVertexAttribPointer, int, int, int, int, int, intptr);
 RESOLVE(void, glUniformMatrix2x3fv, int, int, int, const void *);
 RESOLVE(void, glUniformMatrix3x2fv, int, int, int, const void *);
 RESOLVE(void, glUniformMatrix2x4fv, int, int, int, const void *);
 RESOLVE(void, glUniformMatrix4x2fv, int, int, int, const void *);
 RESOLVE(void, glUniformMatrix3x4fv, int, int, int, const void *);
 RESOLVE(void, glUniformMatrix4x3fv, int, int, int, const void *);
-RESOLVE(void, glBindBufferRange, int, int, int, intptr, intptr);
-RESOLVE(void, glVertexAttribIPointer, int, int, int, int, intptr);
-RESOLVE(void, glUniform1uiv, int, int, const void *);
-RESOLVE(void, glUniform2uiv, int, int, const void *);
-RESOLVE(void, glUniform3uiv, int, int, const void *);
-RESOLVE(void, glUniform4uiv, int, int, const void *);
-RESOLVE(void, glClearBufferiv, int, int, const void *);
-RESOLVE(void, glClearBufferuiv, int, int, const void *);
-RESOLVE(void, glClearBufferfv, int, int, const void *);
-RESOLVE(void, glClearBufferfi, int, int, float, int);
+
+// -- Framebuffers --
 RESOLVE(void, glBindRenderbuffer, int, int);
 RESOLVE(void, glDeleteRenderbuffers, int, const unsigned int *);
 RESOLVE(void, glGenRenderbuffers, int, GLuint *);
@@ -105,52 +149,37 @@ RESOLVE(void, glDeleteFramebuffers, int, const unsigned int *);
 RESOLVE(void, glGenFramebuffers, int, int *);
 RESOLVE(void, glFramebufferTexture2D, int, int, int, int, int);
 RESOLVE(void, glFramebufferRenderbuffer, int, int, int, int);
-RESOLVE(void, glGenerateMipmap, int);
 RESOLVE(void, glBlitFramebuffer, int, int, int, int, int, int, int, int, int, int);
 RESOLVE(void, glRenderbufferStorageMultisample, int, int, int, int, int);
 RESOLVE(void, glFramebufferTextureLayer, int, int, int, int, int);
+RESOLVE(void, glDrawBuffers, int, const int *);
+
+// -- Vertex Arrays & Drawing --
 RESOLVE(void, glBindVertexArray, int);
 RESOLVE(void, glDeleteVertexArrays, int, const unsigned int *);
 RESOLVE(void, glGenVertexArrays, int, int *);
 RESOLVE(void, glDrawArraysInstanced, int, int, int, int);
 RESOLVE(void, glDrawElementsInstanced, int, int, int, intptr, int);
-RESOLVE(void, glCopyBufferSubData, int, int, intptr, intptr, intptr);
-RESOLVE(int, glGetUniformBlockIndex, int, const char *);
-RESOLVE(void, glGetActiveUniformBlockiv, int, int, int, int *);
-RESOLVE(void, glGetActiveUniformBlockName, int, int, int, int *, char *);
-RESOLVE(void, glUniformBlockBinding, GLuint, GLuint, GLuint);
-RESOLVE(void, glGenSamplers, int, int *);
-RESOLVE(void, glDeleteSamplers, int, const GLuint *);
-RESOLVE(void, glBindSampler, int, int);
-RESOLVE(void, glSamplerParameteri, int, int, int);
-RESOLVE(void, glSamplerParameterf, int, int, float);
-RESOLVE(void, glVertexAttribDivisor, int, int);
-RESOLVE(void, glDispatchCompute, int, int, int);
-RESOLVE(void, glMemoryBarrier, int);
-RESOLVE(void, glBindImageTexture, int, int, int, int, int, int, int);
-RESOLVE(void, glBindBufferBase, int, int, int);
-RESOLVE(void *, glMapBufferRange, int, intptr, intptr, int);
-RESOLVE(int, glUnmapBuffer, int);
-RESOLVE(void, glPixelStorei, int, int);
-RESOLVE(void, glGetProgramInterfaceiv, int, int, int, int *);
-RESOLVE(void, glGetProgramResourceiv, int, int, int, int, const int *, int, int *, int *);
-RESOLVE(void, glGetProgramResourceName, int, int, int, int, int *, char *);
-RESOLVE(void, glGetBufferParameteriv, unsigned int, unsigned int, int *);
+RESOLVE(void, glMultiDrawArraysIndirect, int, const void *, int, int);
+RESOLVE(void, glMultiDrawElementsIndirect, int, int, const void *, int, int);
 
+// -- Queries & Extensions --
+RESOLVE(void, glDeleteQueries, int, const unsigned int *);
 RESOLVE(GLuint64, glGetTextureHandleARB, int);
 RESOLVE(void, glMakeTextureHandleResidentARB, GLuint64);
 RESOLVE(void, glMakeTextureHandleNonResidentARB, GLuint64);
-// RESOLVE(void, glUniformHandleui64ARB, int, GLuint64); // Optional, for direct uniform setting
-RESOLVE(void, glMultiDrawArraysIndirect, int, const void *, int, int);
-RESOLVE(void, glMultiDrawElementsIndirect, int, int, const void *, int, int);
+
+
+// -----------------------------------------------------------------------------
+// OpenGL Loader Logic
+// -----------------------------------------------------------------------------
 
 #ifndef EXTERN_GL
 
 static void *load_opengl_function(PyObject *loader_function, const char *method)
 {
     PyObject *res = PyObject_CallFunction(loader_function, "(s)", method);
-    if (!res)
-    {
+    if (!res) {
         return NULL;
     }
     void *ptr = PyLong_AsVoidPtr(res);
@@ -164,8 +193,7 @@ static int load_gl(PyObject *loader)
 {
     PyObject *loader_function = PyObject_GetAttrString(loader, "load_opengl_function");
 
-    if (!loader_function)
-    {
+    if (!loader_function) {
         PyErr_Format(PyExc_ValueError, "invalid loader");
         return -1;
     }
@@ -180,6 +208,7 @@ static int load_gl(PyObject *loader)
             Py_XDECREF(s);                                \
         }                                                 \
     } while (0)
+
 #define load(name) \
     do { \
         void *temp_ptr = load_opengl_function(loader_function, #name); \
@@ -350,7 +379,10 @@ static void load_gl(PyObject *loader)
         return NULL; \
     }
 
-// --- Helper Functions ---
+
+// -----------------------------------------------------------------------------
+// Helper Functions (State Binding & Internals)
+// -----------------------------------------------------------------------------
 
 static FORCE_INLINE void zeromem(void *NO_ALIAS data, int size)
 {
@@ -367,89 +399,35 @@ static void bind_uniforms(const Pipeline *self)
         const void *ptr = data + header->binding[i].offset;
         switch (header->binding[i].function)
         {
-        case 0:
-            glUniform1iv(header->binding[i].location, header->binding[i].count, ptr);
-            break;
-        case 1:
-            glUniform2iv(header->binding[i].location, header->binding[i].count, ptr);
-            break;
-        case 2:
-            glUniform3iv(header->binding[i].location, header->binding[i].count, ptr);
-            break;
-        case 3:
-            glUniform4iv(header->binding[i].location, header->binding[i].count, ptr);
-            break;
-        case 4:
-            glUniform1iv(header->binding[i].location, header->binding[i].count, ptr);
-            break;
-        case 5:
-            glUniform2iv(header->binding[i].location, header->binding[i].count, ptr);
-            break;
-        case 6:
-            glUniform3iv(header->binding[i].location, header->binding[i].count, ptr);
-            break;
-        case 7:
-            glUniform4iv(header->binding[i].location, header->binding[i].count, ptr);
-            break;
-        case 8:
-            glUniform1uiv(header->binding[i].location, header->binding[i].count, ptr);
-            break;
-        case 9:
-            glUniform2uiv(header->binding[i].location, header->binding[i].count, ptr);
-            break;
-        case 10:
-            glUniform3uiv(header->binding[i].location, header->binding[i].count, ptr);
-            break;
-        case 11:
-            glUniform4uiv(header->binding[i].location, header->binding[i].count, ptr);
-            break;
-        case 12:
-            glUniform1fv(header->binding[i].location, header->binding[i].count, ptr);
-            break;
-        case 13:
-            glUniform2fv(header->binding[i].location, header->binding[i].count, ptr);
-            break;
-        case 14:
-            glUniform3fv(header->binding[i].location, header->binding[i].count, ptr);
-            break;
-        case 15:
-            glUniform4fv(header->binding[i].location, header->binding[i].count, ptr);
-            break;
-        case 16:
-            glUniformMatrix2fv(header->binding[i].location, header->binding[i].count, 0, ptr);
-            break;
-        case 17:
-            glUniformMatrix2x3fv(header->binding[i].location, header->binding[i].count, 0, ptr);
-            break;
-        case 18:
-            glUniformMatrix2x4fv(header->binding[i].location, header->binding[i].count, 0, ptr);
-            break;
-        case 19:
-            glUniformMatrix3x2fv(header->binding[i].location, header->binding[i].count, 0, ptr);
-            break;
-        case 20:
-            glUniformMatrix3fv(header->binding[i].location, header->binding[i].count, 0, ptr);
-            break;
-        case 21:
-            glUniformMatrix3x4fv(header->binding[i].location, header->binding[i].count, 0, ptr);
-            break;
-        case 22:
-            glUniformMatrix4x2fv(header->binding[i].location, header->binding[i].count, 0, ptr);
-            break;
-        case 23:
-            glUniformMatrix4x3fv(header->binding[i].location, header->binding[i].count, 0, ptr);
-            break;
-        case 24:
-            glUniformMatrix4fv(header->binding[i].location, header->binding[i].count, 0, ptr);
-            break;
+        case 0:  glUniform1iv(header->binding[i].location, header->binding[i].count, ptr); break;
+        case 1:  glUniform2iv(header->binding[i].location, header->binding[i].count, ptr); break;
+        case 2:  glUniform3iv(header->binding[i].location, header->binding[i].count, ptr); break;
+        case 3:  glUniform4iv(header->binding[i].location, header->binding[i].count, ptr); break;
+        case 4:  glUniform1iv(header->binding[i].location, header->binding[i].count, ptr); break;
+        case 5:  glUniform2iv(header->binding[i].location, header->binding[i].count, ptr); break;
+        case 6:  glUniform3iv(header->binding[i].location, header->binding[i].count, ptr); break;
+        case 7:  glUniform4iv(header->binding[i].location, header->binding[i].count, ptr); break;
+        case 8:  glUniform1uiv(header->binding[i].location, header->binding[i].count, ptr); break;
+        case 9:  glUniform2uiv(header->binding[i].location, header->binding[i].count, ptr); break;
+        case 10: glUniform3uiv(header->binding[i].location, header->binding[i].count, ptr); break;
+        case 11: glUniform4uiv(header->binding[i].location, header->binding[i].count, ptr); break;
+        case 12: glUniform1fv(header->binding[i].location, header->binding[i].count, ptr); break;
+        case 13: glUniform2fv(header->binding[i].location, header->binding[i].count, ptr); break;
+        case 14: glUniform3fv(header->binding[i].location, header->binding[i].count, ptr); break;
+        case 15: glUniform4fv(header->binding[i].location, header->binding[i].count, ptr); break;
+        case 16: glUniformMatrix2fv(header->binding[i].location, header->binding[i].count, 0, ptr); break;
+        case 17: glUniformMatrix2x3fv(header->binding[i].location, header->binding[i].count, 0, ptr); break;
+        case 18: glUniformMatrix2x4fv(header->binding[i].location, header->binding[i].count, 0, ptr); break;
+        case 19: glUniformMatrix3x2fv(header->binding[i].location, header->binding[i].count, 0, ptr); break;
+        case 20: glUniformMatrix3fv(header->binding[i].location, header->binding[i].count, 0, ptr); break;
+        case 21: glUniformMatrix3x4fv(header->binding[i].location, header->binding[i].count, 0, ptr); break;
+        case 22: glUniformMatrix4x2fv(header->binding[i].location, header->binding[i].count, 0, ptr); break;
+        case 23: glUniformMatrix4x3fv(header->binding[i].location, header->binding[i].count, 0, ptr); break;
+        case 24: glUniformMatrix4fv(header->binding[i].location, header->binding[i].count, 0, ptr); break;
         default:
-            // Unknown uniform function ID
-            // In release: skip
-            // In debug: scream loudly
-        #ifdef DEBUG
-            fprintf(stderr, "Invalid uniform function id: %d\n",
-                    header->binding[i].function);
-        #endif
+            #ifdef DEBUG
+            fprintf(stderr, "Invalid uniform function id: %d\n", header->binding[i].function);
+            #endif
             break;
         }
     }
@@ -635,7 +613,10 @@ static FORCE_INLINE void bind_descriptor_set(Context *self, DescriptorSet *set)
     }
 }
 
-// --- Utilities ---
+
+// -----------------------------------------------------------------------------
+// Utilities & Type Conversions
+// -----------------------------------------------------------------------------
 
 static int startswith(const char *str, const char *prefix)
 {
@@ -738,7 +719,6 @@ fail:
     Py_DECREF(lookup);
     return 0;
 }
-
 
 // Adapted to use ModuleState for caching
 static int get_image_format(
@@ -848,11 +828,10 @@ fail:
     return 0;
 }
 
-
 static int count_mipmaps(int width, int height)
 {
     if (width <= 0 || height <= 0)
-        return 0;  // or assert / error out
+        return 0;
 
     int size = width > height ? width : height;
     int levels = 0;
@@ -862,10 +841,8 @@ static int count_mipmaps(int width, int height)
         levels++;
         size >>= 1;
     }
-
     return levels;
 }
-
 
 static void remove_dict_value(PyObject *dict, const PyObject *obj)
 {
@@ -955,6 +932,11 @@ static int to_viewport(Viewport *value, PyObject *obj, const int x, const int y,
     return 1;
 }
 
+
+// -----------------------------------------------------------------------------
+// Traverse & Clear (GC)
+// -----------------------------------------------------------------------------
+
 static int GLObject_traverse(GLObject *self, visitproc visit, void *arg) {
     Py_VISIT(Py_TYPE(self)); // Crucial: Visit the type itself in heap types
     Py_VISIT(self->extra);
@@ -995,6 +977,11 @@ static void gl_object_init(const Context *ctx, GLObject *obj, const int id, cons
         Atomic_Increment(&obj->trash->ref_count);
     }
 }
+
+
+// -----------------------------------------------------------------------------
+// Builders (Framebuffers, VAOs, Samplers, Programs)
+// -----------------------------------------------------------------------------
 
 static GLObject *build_framebuffer(Context *self, PyObject *attachments) // HAS GC_TRACK
 {
@@ -1678,14 +1665,7 @@ static GLObject *compile_shader(Context *self, PyObject *pair)
     int result = PyDict_SetDefaultRef(self->shader_cache, pair, (PyObject *)res, &existing);
 
     if (result < 0) {
-        glDeleteShader(shader); // Clean up the raw handle (res doesn't own it yet in failure path if not careful)
-        // Actually, if SetDefaultRef fails, 'res' is still alive. 
-        // We should just DECREF res, and let dealloc handle the shader deletion.
-        // But since we just created it, we can force clean.
-        // However, safest to rely on standard dealloc path if 'res' was fully init.
-        // Here, we manually delete because 'res' wasn't fully hooked into the dict.
-        // Wait, gl_object_init sets up trash. So Py_DECREF(res) will invoke dealloc -> enqueue_trash.
-        // BUT we need to be careful if enqueue_trash requires the context/shared trash to be alive.
+        glDeleteShader(shader);
         Py_DECREF(res);
         return NULL;
     }
@@ -1784,7 +1764,6 @@ static GLObject *compile_compute_program(Context *self, PyObject *includes, PyOb
     PyObject *key = NULL;
     PyObject *temp_bytes = NULL;
     GLObject *res = NULL;
-    // char *log_buffer = NULL;
     int shader = 0;
     int program = 0;
 
@@ -2120,6 +2099,11 @@ static ImageFace *build_image_face(Image *self, PyObject *key) // HAS GC_TRACK
     return res;
 }
 
+
+// -----------------------------------------------------------------------------
+// Image Manipulation Utilities
+// -----------------------------------------------------------------------------
+
 static void clear_bound_image(const Image *self)
 {
     // NOTE: Caller must hold self->ctx->state_lock
@@ -2379,6 +2363,11 @@ static PyObject *read_image_face(ImageFace *src, IntPair size, IntPair offset, P
     Py_RETURN_NONE;
 }
 
+
+// -----------------------------------------------------------------------------
+// Initialization & Module Loading
+// -----------------------------------------------------------------------------
+
 static int init_gl_limits(ModuleState *state)
 {
     // Zero first so missing queries are obvious in debug
@@ -2585,7 +2574,10 @@ static PyObject *meth_cleanup(PyObject *self, PyObject *args)
     Py_RETURN_NONE;
 }
 
-// --- Resource Management (Trash & Release) ---
+
+// -----------------------------------------------------------------------------
+// Resource Management (Trash & Release)
+// -----------------------------------------------------------------------------
 
 // Safe decref for list items while unlocking state_lock
 static void safe_decref_list(Context *self, PyObject **list, int count, int is_locked) {
@@ -2642,8 +2634,8 @@ void flush_trash(const Context *self) {
         unsigned int id = (unsigned int)to_delete[i].id;
         if (id == 0) continue;
         switch (to_delete[i].type) {
-            case TRASH_BUFFER:       glDeleteBuffers(1, &id); break;
-            case TRASH_TEXTURE:      glDeleteTextures(1, &id); break;
+            case TRASH_BUFFER:        glDeleteBuffers(1, &id); break;
+            case TRASH_TEXTURE:       glDeleteTextures(1, &id); break;
             case TRASH_RENDERBUFFER:  glDeleteRenderbuffers(1, &id); break;
             case TRASH_FRAMEBUFFER:   glDeleteFramebuffers(1, &id); break;
             case TRASH_VERTEX_ARRAY:  glDeleteVertexArrays(1, &id); break;
@@ -2652,19 +2644,12 @@ void flush_trash(const Context *self) {
             case TRASH_SAMPLER:       glDeleteSamplers(1, &id); break;
             case TRASH_QUERY:         glDeleteQueries(1, &id); break;
             default: {
-                // invalid_type = 1;
-                // break;
                 continue;
             }
         }
     }
     Py_END_ALLOW_THREADS
     
-    // if (invalid_type) {
-    //     PyMem_Free(to_delete);
-    //     PyErr_SetString(PyExc_TypeError, "invalid trash type");
-    //     return;
-    // }
     PyMem_Free(to_delete);
 }
 
@@ -2696,7 +2681,6 @@ static void enqueue_trash(SharedTrash *trash, int id, int type)
 
     PyMutex_Unlock(&trash->lock);
 }
-
 
 static void release_descriptor_set(Context *self, DescriptorSet *set, int is_locked)
 {
@@ -2839,6 +2823,11 @@ static void release_vertex_array(Context *self, GLObject *vertex_array)
         }
     }
 }
+
+
+// -----------------------------------------------------------------------------
+// Type: Context
+// -----------------------------------------------------------------------------
 
 static int Context_traverse(Context *self, visitproc visit, void *arg) {
     // 3.14t requires visiting the type itself
@@ -3078,6 +3067,11 @@ static PyObject *meth_context(PyObject *self, PyObject *arg)
     return PyObject_CallNoArgs((PyObject *)state->Context_type);
 }
 
+
+// -----------------------------------------------------------------------------
+// Type: Buffer
+// -----------------------------------------------------------------------------
+
 static Buffer *Context_meth_buffer(Context *self, PyObject *args, PyObject *kwargs)
 {
     static char *keywords[] = {"data", "size", "access", "index", "uniform", "storage", "external", NULL};
@@ -3310,16 +3304,6 @@ static PyObject * Buffer_meth_map(Buffer *self, PyObject * args) {
 
         glBindBuffer(self->target, self->buffer);
 
-        // int actual_size = 0;
-        // glGetBufferParameteriv(self->target, GL_BUFFER_SIZE, &actual_size);
-        // printf("[HyperGL] Buffer ID: %d | Target: 0x%X | Expected Size: %d | Actual Size: %d\n", 
-        //        self->buffer, self->target, self->size, actual_size);
-
-        // int storage_flags = 0;
-        // glGetBufferParameteriv(self->target, GL_BUFFER_IMMUTABLE_STORAGE, &storage_flags);
-        // printf("[HyperGL] Allocation Flags: 0x%X | Mapping Flags: 0x%X\n", 
-        //        storage_flags, GL_PERSISTENT_WRITE_FLAGS);
-
         self->mapped_ptr = glMapBufferRange(self->target, 0, self->size, GL_PERSISTENT_WRITE_FLAGS);
         
         if (!self->mapped_ptr) {
@@ -3384,6 +3368,296 @@ static PyObject * Buffer_meth_unmap(Buffer *self, PyObject *args) {
     PyMutex_Unlock(&self->ctx->state_lock);
     Py_RETURN_NONE;
 }
+
+static PyObject *Buffer_meth_write_texture_handle(const Buffer *self, PyObject *args, PyObject *kwargs)
+{
+    static char *keywords[] = {"offset", "image", NULL};
+    PyObject *image_obj;
+    int offset;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "iO", keywords, &offset, &image_obj))
+        return NULL;
+
+    if (!PyObject_TypeCheck(image_obj, self->ctx->module_state->Image_type)) {
+        PyErr_SetString(PyExc_TypeError, "Argument must be an Image object");
+        return NULL;
+    }
+
+    Image *img = (Image *)image_obj;
+
+    // Auto-fetch handle if missing
+    if (img->bindless_handle == 0) {
+        if (!glGetTextureHandleARB) {
+            PyErr_SetString(PyExc_RuntimeError, "Bindless not supported");
+            return NULL;
+        }
+        PyMutex_Lock(&self->ctx->state_lock);
+        img->bindless_handle = glGetTextureHandleARB(img->image);
+        PyMutex_Unlock(&self->ctx->state_lock);
+        if (img->bindless_handle == 0) {
+            PyErr_SetString(PyExc_RuntimeError, "Failed to get texture handle");
+            return NULL;
+        }
+    }
+
+    if (offset < 0 || offset + sizeof(GLuint64) > (size_t)self->size) {
+        PyErr_SetString(PyExc_ValueError, "Offset out of bounds");
+        return NULL;
+    }
+
+    // Write handle
+    if (self->mapped_ptr) {
+        // If mapped (persistent SSBO), write directly
+        PyMutex_Lock(&self->ctx->state_lock);
+        *(GLuint64 *)((char *)self->mapped_ptr + offset) = img->bindless_handle;
+        PyMutex_Unlock(&self->ctx->state_lock);
+    } else {
+        // Otherwise use SubData
+        PyMutex_Lock(&self->ctx->state_lock);
+        glBindBuffer(self->target, self->buffer);
+        glBufferSubData(self->target, offset, sizeof(GLuint64), &img->bindless_handle);
+        PyMutex_Unlock(&self->ctx->state_lock);
+    }
+
+    Py_RETURN_NONE;
+}
+
+static PyObject *Buffer_meth_write(const Buffer *self, PyObject *args, PyObject *kwargs)
+{
+    static char *keywords[] = {"data", "offset", NULL};
+    PyObject *data;
+    int offset = 0;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|i", keywords, &data, &offset)) {
+        return NULL;
+    }
+
+    VALIDATE(!self->ctx->is_lost, PyExc_RuntimeError, "the context is lost");
+    VALIDATE(offset >= 0 && offset <= self->size, PyExc_ValueError, "invalid offset");
+
+    BufferView *buffer_view = NULL;
+    if (Py_TYPE(data) == self->ctx->module_state->Buffer_type) {
+        buffer_view = (BufferView *)PyObject_CallMethod(data, "view", NULL);
+    } else if (Py_TYPE(data) == self->ctx->module_state->BufferView_type) {
+        buffer_view = (BufferView *)new_ref(data);
+    }
+
+    if (buffer_view) {
+        if (buffer_view->size + offset > self->size) {
+            Py_DECREF(buffer_view);
+            PyErr_Format(PyExc_ValueError, "invalid size");
+            return NULL;
+        }
+
+        PyMutex_Lock(&self->ctx->state_lock); 
+        
+        glBindBuffer(GL_COPY_READ_BUFFER, buffer_view->buffer->buffer);
+        glBindBuffer(GL_COPY_WRITE_BUFFER, self->buffer);
+        glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, buffer_view->offset, offset, buffer_view->size);
+        glBindBuffer(GL_COPY_READ_BUFFER, 0);
+        glBindBuffer(GL_COPY_WRITE_BUFFER, 0);
+        
+        PyMutex_Unlock(&self->ctx->state_lock); 
+        
+        Py_DECREF(buffer_view);
+        Py_RETURN_NONE;
+    }
+
+    PyObject *mem = PyMemoryView_GetContiguous(data, PyBUF_READ, 'C');
+    if (!mem) return NULL;
+
+    Py_buffer view;
+    if (PyObject_GetBuffer(mem, &view, PyBUF_SIMPLE)) {
+        Py_DECREF(mem);
+        return NULL;
+    }
+
+    int data_size = (int)view.len;
+    if (data_size + offset > self->size) {
+        PyBuffer_Release(&view);
+        Py_DECREF(mem);
+        PyErr_Format(PyExc_ValueError, "invalid size");
+        return NULL;
+    }
+
+    if (data_size > 0) {
+        PyMutex_Lock(&self->ctx->state_lock); 
+
+        // Logic to prevent breaking VAO/Descriptor state
+        if (self->target == GL_ELEMENT_ARRAY_BUFFER) {
+            bind_vertex_array_internal(self->ctx, 0); 
+        }
+
+        if (self->target == GL_UNIFORM_BUFFER) {
+            Py_XSETREF(self->ctx->current_descriptor_set, NULL);
+        }
+
+        // Use a neutral binding point (GL_COPY_WRITE_BUFFER)
+        glBindBuffer(GL_COPY_WRITE_BUFFER, self->buffer);
+        glBufferSubData(GL_COPY_WRITE_BUFFER, offset, data_size, view.buf);
+        glBindBuffer(GL_COPY_WRITE_BUFFER, 0);
+
+        PyMutex_Unlock(&self->ctx->state_lock);
+    }
+
+    PyBuffer_Release(&view);
+    Py_DECREF(mem);
+    Py_RETURN_NONE;
+}
+
+static PyObject *Buffer_meth_read(Buffer *self, PyObject *args, PyObject *kwargs)
+{
+    static char *keywords[] = {"size", "offset", "into", NULL};
+
+    PyObject *size_arg = Py_None;
+    int offset = 0;
+    PyObject *into = Py_None;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|OiO", keywords, &size_arg, &offset, &into))
+    {
+        return NULL;
+    }
+
+    if (self->ctx->is_lost)
+    {
+        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        return NULL;
+    }
+
+    if (offset < 0 || offset > self->size)
+    {
+        PyErr_Format(PyExc_ValueError, "invalid offset");
+        return NULL;
+    }
+
+    if (size_arg != Py_None && !PyLong_CheckExact(size_arg))
+    {
+        PyErr_Format(PyExc_TypeError, "the size must be an int");
+        return NULL;
+    }
+
+    int size = self->size - offset;
+    if (size_arg != Py_None)
+    {
+        size = to_int(size_arg);
+        if (size < 0)
+        {
+            PyErr_Format(PyExc_ValueError, "invalid size");
+            return NULL;
+        }
+    }
+
+    if (size < 0 || size + offset > self->size)
+    {
+        PyErr_Format(PyExc_ValueError, "invalid size");
+        return NULL;
+    }
+
+    if (self->target == GL_ELEMENT_ARRAY_BUFFER)
+    {
+        bind_vertex_array(self->ctx, 0);
+    }
+
+    if (self->target == GL_UNIFORM_BUFFER)
+    {
+        self->ctx->current_descriptor_set = NULL;
+    }
+
+    glBindBuffer(self->target, self->buffer);
+
+    if (into == Py_None)
+    {
+        PyObject *res = PyBytes_FromStringAndSize(NULL, size);
+        glGetBufferSubData(self->target, offset, size, PyBytes_AsString(res));
+        return res;
+    }
+
+    if (Py_TYPE(into) == self->ctx->module_state->Buffer_type)
+    {
+        PyObject *chunk = PyObject_CallMethod((PyObject *)self, "view", "(ii)", size, offset);
+        return PyObject_CallMethod(into, "write", "(N)", chunk);
+    }
+
+    if (Py_TYPE(into) == self->ctx->module_state->BufferView_type)
+    {
+        BufferView *buffer_view = (BufferView *)into;
+        if (size > buffer_view->size)
+        {
+            PyErr_Format(PyExc_ValueError, "invalid size");
+            return NULL;
+        }
+        PyObject *chunk = PyObject_CallMethod((PyObject *)self, "view", "(ii)", size, offset);
+        return PyObject_CallMethod((PyObject *)buffer_view->buffer, "write", "(Ni)", chunk, buffer_view->offset);
+    }
+
+    Py_buffer view;
+    if (PyObject_GetBuffer(into, &view, PyBUF_WRITABLE))
+    {
+        return NULL;
+    }
+
+    if (size > (int)view.len)
+    {
+        PyErr_Format(PyExc_ValueError, "invalid size");
+        return NULL;
+    }
+
+    Py_BEGIN_ALLOW_THREADS 
+    glBindBuffer(self->target, self->buffer);
+    glGetBufferSubData(self->target, offset, size, view.buf);
+    Py_END_ALLOW_THREADS
+    
+    PyBuffer_Release(&view);
+    Py_RETURN_NONE;
+}
+
+static BufferView *Buffer_meth_view(Buffer *self, PyObject *args, PyObject *kwargs)
+{
+    static char *keywords[] = {"size", "offset", NULL};
+
+    PyObject *size_arg = Py_None;
+    int offset = 0;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|Oi", keywords, &size_arg, &offset))
+    {
+        return NULL;
+    }
+
+    int size = self->size - offset;
+    if (size_arg != Py_None)
+    {
+        size = to_int(size_arg);
+    }
+
+    if (self->ctx->is_lost)
+    {
+        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        return NULL;
+    }
+
+    if (offset < 0 || offset > self->size)
+    {
+        PyErr_Format(PyExc_ValueError, "invalid offset");
+        return NULL;
+    }
+
+    if (size < 0 || offset + size > self->size)
+    {
+        PyErr_Format(PyExc_ValueError, "invalid size");
+        return NULL;
+    }
+
+    BufferView *res = PyObject_New(BufferView, self->ctx->module_state->BufferView_type);
+    res->buffer = (Buffer *)new_ref(self);
+    res->offset = offset;
+    res->size = size;
+    return res;
+}
+
+
+// -----------------------------------------------------------------------------
+// Type: Image
+// -----------------------------------------------------------------------------
 
 static int Image_write_internal(const Image *self, PyObject *data) {
     if (self->ctx->is_lost) {
@@ -3696,781 +3970,6 @@ static PyObject *Image_meth_make_resident(Image *self, PyObject *args)
     
     Py_RETURN_NONE;
 }
-
-static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *kwargs)
-{
-    // 1. Variable Declarations
-    PyObject *create_kwargs = NULL;
-    GLObject *program = NULL;
-    PyObject *uniform_layout = NULL;
-    PyObject *validate = NULL;
-    PyObject *layout_bindings = NULL;
-    PyObject *framebuffer_attachments = NULL;
-    PyObject *vertex_array_bindings = NULL;
-    PyObject *resource_bindings = NULL;
-    PyObject *settings = NULL;
-    PyObject *uniforms = NULL; 
-    PyObject *uniform_data = NULL;
-    GLObject *framebuffer = NULL;
-    GLObject *vertex_array = NULL;
-    DescriptorSet *descriptor_set = NULL;
-    GlobalSettings *global_settings = NULL;
-    Pipeline *res = NULL;
-
-    // 2. Argument Parsing
-    static char *keywords[] = {
-        "vertex_shader", "fragment_shader", "layout", "resources", "uniforms",
-        "depth", "stencil", "blend", "framebuffer", "vertex_buffers",
-        "index_buffer", "short_index", "cull_face", "topology", "vertex_count",
-        "instance_count", "first_vertex", "viewport", "uniform_data",
-        "viewport_data", "render_data", "includes", NULL,
-    };
-
-    PyObject *vertex_shader = NULL;
-    PyObject *fragment_shader = NULL;
-    PyObject *layout = self->module_state->empty_tuple;
-    PyObject *resources = self->module_state->empty_tuple;
-    PyObject *arg_uniforms = Py_None; 
-    PyObject *depth = Py_None;
-    PyObject *stencil = Py_None;
-    PyObject *blend = Py_None;
-    PyObject *framebuffer_arg = NULL;
-    PyObject *vertex_buffers = self->module_state->empty_tuple;
-    PyObject *index_buffer = Py_None;
-    int short_index = 0;
-    PyObject *cull_face = self->module_state->str_none;
-    PyObject *topology_arg = self->module_state->str_triangles;
-    int vertex_count = 0;
-    int instance_count = 1;
-    int first_vertex = 0;
-    PyObject *viewport = Py_None;
-    PyObject *arg_uniform_data = Py_None; 
-    PyObject *viewport_data = Py_None;
-    PyObject *render_data = Py_None;
-    PyObject *includes = Py_None;
-
-    if (PyTuple_Size(args) || !kwargs) {
-        PyErr_Format(PyExc_TypeError, "pipeline only takes keyword-only arguments");
-        return NULL;
-    }
-
-    Pipeline *template = (Pipeline *)PyDict_GetItemString(kwargs, "template");
-    if (template && Py_TYPE((PyObject *)template) != self->module_state->Pipeline_type) {
-        PyErr_Format(PyExc_ValueError, "invalid template");
-        return NULL;
-    }
-
-    if (template) {
-        if (PyDict_GetItemString(kwargs, "vertex_shader") || 
-            PyDict_GetItemString(kwargs, "fragment_shader") || 
-            PyDict_GetItemString(kwargs, "layout") || 
-            PyDict_GetItemString(kwargs, "includes")) {
-            PyErr_Format(PyExc_ValueError, "cannot use template with shader/layout/includes specified");
-            return NULL;
-        }
-        create_kwargs = PyDict_Copy(template->create_kwargs);
-        if (!create_kwargs) goto fail;
-        PyDict_Update(create_kwargs, kwargs);
-        PyDict_DelItemString(create_kwargs, "template");
-    } else {
-        create_kwargs = PyDict_Copy(kwargs);
-        if (!create_kwargs) goto fail;
-    }
-
-    if (!PyArg_ParseTupleAndKeywords(args, create_kwargs, "|$O!O!OOOOOOOOOpOOiiiOOOOO", keywords,
-        &PyUnicode_Type, &vertex_shader, &PyUnicode_Type, &fragment_shader, &layout, &resources,
-        &arg_uniforms, &depth, &stencil, &blend, &framebuffer_arg, &vertex_buffers, &index_buffer,
-        &short_index, &cull_face, &topology_arg, &vertex_count, &instance_count, &first_vertex,
-        &viewport, &arg_uniform_data, &viewport_data, &render_data, &includes))
-    {
-        goto fail;
-    }
-
-    if (self->is_lost) { PyErr_SetString(PyExc_RuntimeError, "context lost"); goto fail; }
-    if (!vertex_shader || !fragment_shader || !framebuffer_arg) { PyErr_SetString(PyExc_TypeError, "missing required args"); goto fail; }
-
-    Viewport viewport_value;
-    if (!to_viewport(&viewport_value, viewport, 0, 0, 0, 0)) goto fail;
-
-    int topology;
-    if (!get_topology(self->module_state, self->module_state->helper, topology_arg, &topology)) goto fail;
-
-    // 4. Logic & Creation
-    if (template) {
-        program = (GLObject *)new_ref(template->program);
-        Atomic_Increment(&program->uses);
-    } else {
-        program = compile_program(self, includes != Py_None ? includes : self->includes, vertex_shader, fragment_shader, layout);
-    }
-    if (!program) goto fail;
-
-    if (arg_uniforms != Py_None)
-    {
-        PyObject *tuple = PyObject_CallMethod(self->module_state->helper, "uniforms", "(OOO)", program->extra, arg_uniforms, arg_uniform_data);
-        if (!tuple) goto fail;
-
-        PyObject *item0 = PyTuple_GetItem(tuple, 0); 
-        PyObject *item1 = PyTuple_GetItem(tuple, 1); 
-        PyObject *item2 = PyTuple_GetItem(tuple, 2); 
-
-        uniforms = PyDictProxy_New(item0);
-        if (!uniforms) { Py_DECREF(tuple); goto fail; }
-
-        uniform_layout = new_ref(item1);    
-        uniform_data = new_ref(item2);      
-        Py_DECREF(tuple);
-    } else {
-        uniforms = NULL;
-        if (arg_uniform_data != Py_None) {
-            uniform_data = new_ref(arg_uniform_data); 
-        } else {
-            uniform_data = NULL;
-        }
-    }
-
-    validate = PyObject_CallMethod(self->module_state->helper, "validate", "(OOOOO)", program->extra, layout, resources, vertex_buffers, self->info_dict);
-    if (!validate) goto fail;
-
-    layout_bindings = PyObject_CallMethod(self->module_state->helper, "layout_bindings", "(O)", layout);
-    if (!layout_bindings) goto fail;
-
-    int layout_count = (int)PyList_Size(layout_bindings);
-    if (layout_count > 0) {
-        PyMutex_Lock(&self->state_lock);
-        int prev_program = self->current_program;
-        bind_program_internal(self, program->obj);
-        for (int i = 0; i < layout_count; ++i) {
-            PyObject *obj = PyList_GetItem(layout_bindings, i);
-            PyObject *name = PyTuple_GetItem(obj, 0);
-            int binding = to_int(PyTuple_GetItem(obj, 1));
-            
-            const char *name_str = PyUnicode_AsUTF8(name);
-            if (!name_str) {
-                PyMutex_Unlock(&self->state_lock);
-                goto fail;
-            }
-
-            int location = glGetUniformLocation(program->obj, name_str);
-            if (location >= 0) glUniform1i(location, binding);
-            else {
-                GLuint index = glGetUniformBlockIndex(program->obj, name_str);
-                if (index != GL_INVALID_INDEX) {
-                    glUniformBlockBinding(program->obj, index, (GLuint)binding);
-                }
-            }
-        }
-        bind_program_internal(self, prev_program);
-        PyMutex_Unlock(&self->state_lock);
-    }
-
-    framebuffer_attachments = PyObject_CallMethod(self->module_state->helper, "framebuffer_attachments", "(O)", framebuffer_arg);
-    if (!framebuffer_attachments) goto fail;
-
-    if (framebuffer_attachments != Py_None && viewport == Py_None) {
-        PyObject *size = PyTuple_GetItem(framebuffer_attachments, 0);
-        viewport_value.width = to_int(PyTuple_GetItem(size, 0));
-        viewport_value.height = to_int(PyTuple_GetItem(size, 1));
-    }
-
-    framebuffer = build_framebuffer(self, framebuffer_attachments);
-    if (!framebuffer) goto fail;
-
-    vertex_array_bindings = PyObject_CallMethod(self->module_state->helper, "vertex_array_bindings", "(OO)", vertex_buffers, index_buffer);
-    if (!vertex_array_bindings) goto fail;
-
-    vertex_array = build_vertex_array(self, vertex_array_bindings);
-    if (!vertex_array) goto fail;
-
-    resource_bindings = PyObject_CallMethod(self->module_state->helper, "resource_bindings", "(O)", resources);
-    if (!resource_bindings) goto fail;
-
-    descriptor_set = build_descriptor_set(self, resource_bindings);
-    if (!descriptor_set) goto fail;
-
-    settings = PyObject_CallMethod(self->module_state->helper, "settings", "(OOOOO)", cull_face, depth, stencil, blend, framebuffer_attachments);
-    if (!settings) goto fail;
-
-    global_settings = build_global_settings(self, settings);
-    if (!global_settings) goto fail;
-
-    // 5. Allocation
-    res = PyObject_GC_New(Pipeline, self->module_state->Pipeline_type);
-    if (!res) goto fail;
-    
-    // Init pointers to NULL
-    res->ctx = NULL;
-    res->create_kwargs = NULL;
-    res->framebuffer = NULL;
-    res->vertex_array = NULL;
-    res->program = NULL;
-    res->uniforms = NULL;
-    res->uniform_layout = NULL;
-    res->uniform_data = NULL;
-    res->descriptor_set = NULL;
-    res->global_settings = NULL;
-    res->viewport_data = NULL;
-    res->render_data = NULL;
-    
-    zeromem(&res->uniform_layout_buffer, sizeof(Py_buffer));
-    zeromem(&res->uniform_data_buffer, sizeof(Py_buffer));
-    zeromem(&res->viewport_data_buffer, sizeof(Py_buffer));
-    zeromem(&res->render_data_buffer, sizeof(Py_buffer));
-    zeromem(&res->params, sizeof(RenderParameters));
-    zeromem(&res->viewport, sizeof(Viewport));
-
-    res->ctx = self;
-    Py_INCREF(self); 
-
-    // Steal References (Ownership transfer from locals to struct)
-    res->create_kwargs = create_kwargs; create_kwargs = NULL;
-    res->framebuffer = framebuffer; framebuffer = NULL;
-    res->vertex_array = vertex_array; vertex_array = NULL;
-    res->program = program; program = NULL;
-    res->uniforms = uniforms; uniforms = NULL;
-    res->uniform_layout = uniform_layout; uniform_layout = NULL;
-    res->uniform_data = uniform_data; uniform_data = NULL;
-    res->descriptor_set = descriptor_set; descriptor_set = NULL;
-    res->global_settings = global_settings; global_settings = NULL;
-
-    res->topology = topology;
-    res->viewport = viewport_value;
-    res->params.vertex_count = vertex_count;
-    res->params.instance_count = instance_count;
-    res->params.first_vertex = first_vertex;
-    res->index_type = (index_buffer != Py_None) ? (short_index ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT) : 0;
-    res->index_size = short_index ? 2 : 4;
-
-    // 6. MemoryViews
-    if (viewport_data == Py_None) {
-        Py_buffer view = {0};
-        view.buf = (void*)&res->viewport;
-        view.len = sizeof(Viewport);
-        view.readonly = 0;
-        view.itemsize = 1;
-        view.format = NULL;
-        view.ndim = 1;
-        view.shape = &view.len;
-        view.strides = &view.itemsize;
-        view.suboffsets = NULL;
-        view.obj = (PyObject*)res; 
-        Py_INCREF(res); 
-
-        res->viewport_data = PyMemoryView_FromBuffer(&view);
-        if (!res->viewport_data) {
-            Py_DECREF(res); 
-            goto fail;
-        }
-    } else {
-        res->viewport_data = new_ref(viewport_data);
-    }
-
-    if (render_data == Py_None) {
-        Py_buffer view = {0};
-        view.buf = (void*)&res->params;
-        view.len = sizeof(RenderParameters);
-        view.readonly = 0;
-        view.itemsize = 1;
-        view.format = NULL;
-        view.ndim = 1;
-        view.shape = &view.len;
-        view.strides = &view.itemsize;
-        view.suboffsets = NULL;
-        view.obj = (PyObject*)res;
-        Py_INCREF(res);
-
-        res->render_data = PyMemoryView_FromBuffer(&view);
-        if (!res->render_data) {
-            Py_DECREF(res);
-            goto fail;
-        }
-    } else {
-        res->render_data = new_ref(render_data);
-    }
-
-    // 7. Buffer Acquisition
-    if (PyObject_GetBuffer(res->viewport_data, &res->viewport_data_buffer, PyBUF_SIMPLE) < 0) goto fail;
-    if (PyObject_GetBuffer(res->render_data, &res->render_data_buffer, PyBUF_SIMPLE) < 0) goto fail;
-
-    if (res->uniforms) {
-        if (PyObject_GetBuffer(res->uniform_layout, &res->uniform_layout_buffer, PyBUF_SIMPLE) < 0) goto fail;
-        if (PyObject_GetBuffer(res->uniform_data, &res->uniform_data_buffer, PyBUF_SIMPLE) < 0) goto fail;
-    }
-
-    PyObject_GC_Track(res); 
-
-    Py_XDECREF(validate); 
-    Py_XDECREF(layout_bindings); 
-    Py_XDECREF(framebuffer_attachments);
-    Py_XDECREF(vertex_array_bindings); 
-    Py_XDECREF(resource_bindings); 
-    Py_XDECREF(settings);
-    
-    return res;
-
-fail:
-    Py_XDECREF(create_kwargs);
-    Py_XDECREF(program);
-    Py_XDECREF(uniforms);
-    Py_XDECREF(uniform_layout);
-    Py_XDECREF(uniform_data);
-    if (framebuffer) Py_DECREF(framebuffer);
-    if (vertex_array) Py_DECREF(vertex_array);
-    if (descriptor_set) Py_DECREF(descriptor_set);
-    if (global_settings) Py_DECREF(global_settings);
-    
-    Py_XDECREF(validate); 
-    Py_XDECREF(layout_bindings); 
-    Py_XDECREF(framebuffer_attachments);
-    Py_XDECREF(vertex_array_bindings); 
-    Py_XDECREF(resource_bindings); 
-    Py_XDECREF(settings);
-    
-    if (res) Py_DECREF(res);
-    return NULL;
-}
-
-static PyObject *Compute_meth_run(Compute *self, PyObject *args)
-{
-    int x = 1, y = 1, z = 1;
-    if (!PyArg_ParseTuple(args, "|iii", &x, &y, &z)) return NULL;
-
-    VALIDATE(x > 0 && y > 0 && z > 0, PyExc_ValueError, 
-        "Dispatch dimensions must be positive");
-
-    if (self->ctx->is_lost) {
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
-        return NULL;
-    }
-
-    PyMutex_Lock(&self->ctx->state_lock);
-
-    bind_program_internal(self->ctx, self->program->obj);
-
-    bind_descriptor_set(self->ctx, self->descriptor_set);
-
-    if (self->uniforms) {
-        bind_uniforms((Pipeline *)self); 
-    }
-    glDispatchCompute(x, y, z);
-    glMemoryBarrier(GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
-    // glMemoryBarrier(GL_ALL_BARRIER_BITS); // sanity check
-    PyMutex_Unlock(&self->ctx->state_lock);
-
-    Py_RETURN_NONE;
-}
-
-static Compute *Context_meth_compute(Context *self, PyObject *args, PyObject *kwargs)
-{
-    static char *keywords[] = {"compute_shader", "resources", "uniforms", "uniform_data", NULL};
-    
-    PyObject *compute_shader = NULL;
-    PyObject *resources = self->module_state->empty_tuple;
-    PyObject *uniforms_arg = Py_None;
-    PyObject *uniform_data = Py_None;
-    PyObject *shader_bytes = NULL;
-    GLObject *program = NULL;
-    PyObject *uniforms_proxy = NULL;
-    PyObject *uniform_layout = NULL;
-    PyObject *uniform_data_blob = NULL;
-    PyObject *resource_bindings = NULL;
-    DescriptorSet *descriptor_set = NULL;
-    Compute *res = NULL;
-    PyObject *tuple = NULL;
-
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|OOO", keywords, 
-        &compute_shader, &resources, &uniforms_arg, &uniform_data))
-    {
-        return NULL; 
-    }
-
-    // --- Shader Processing ---
-    if (PyUnicode_Check(compute_shader)) {
-        shader_bytes = PyUnicode_AsUTF8String(compute_shader);
-        if (!shader_bytes) goto fail;
-    } else if (PyBytes_Check(compute_shader)) {
-        shader_bytes = compute_shader;
-        Py_INCREF(shader_bytes);
-    } else {
-        PyErr_Format(PyExc_TypeError, "compute_shader must be str or bytes");
-        goto fail;
-    }
-
-    program = compile_compute_program(self, NULL, shader_bytes);
-    Py_CLEAR(shader_bytes); 
-    if (!program) goto fail;
-
-    // --- Uniforms Processing ---
-    if (uniforms_arg != Py_None)
-    {
-        tuple = PyObject_CallMethod(self->module_state->helper, "uniforms", "(OOO)", 
-            program->extra, uniforms_arg, uniform_data);
-        
-        if (!tuple) goto fail;
-
-        PyObject *uniform_dict = PyTuple_GetItem(tuple, 0);
-        if (!uniform_dict || !PyDict_Check(uniform_dict)) {
-            PyErr_Format(PyExc_RuntimeError, "uniforms helper returned invalid layout");
-            goto fail;
-        }
-        
-        uniforms_proxy = PyDictProxy_New(uniform_dict);
-        if (!uniforms_proxy) goto fail;
-
-        uniform_layout = PyTuple_GetItem(tuple, 1);
-        Py_XINCREF(uniform_layout);
-        
-        uniform_data_blob = PyTuple_GetItem(tuple, 2);
-        Py_XINCREF(uniform_data_blob);
-        
-        Py_CLEAR(tuple); 
-    }
-
-    // --- Resource Processing ---
-    resource_bindings = PyObject_CallMethod(self->module_state->helper, "resource_bindings", "(O)", resources);
-    if (!resource_bindings) goto fail;
-
-    descriptor_set = build_descriptor_set(self, resource_bindings);
-    Py_CLEAR(resource_bindings);
-    if (!descriptor_set) goto fail;
-
-    // --- Object Creation ---
-    res = PyObject_New(Compute, self->module_state->Compute_type);
-    if (!res) goto fail;
-
-    res->ctx = self;
-    res->program = program;
-    res->descriptor_set = descriptor_set;
-    res->uniforms = uniforms_proxy;
-    res->uniform_layout = uniform_layout;
-    res->uniform_data = uniform_data_blob;
-    res->workgroup_size = NULL;
-    res->create_kwargs = NULL;
-    res->global_settings = NULL;
-    res->framebuffer = NULL;
-    res->vertex_array = NULL;
-    res->viewport_data = NULL;
-    res->render_data = NULL;
-    res->topology = 0;
-    res->index_type = 0;
-    res->index_size = 0;
-
-    zeromem(&res->uniform_layout_buffer, sizeof(Py_buffer));
-    zeromem(&res->uniform_data_buffer, sizeof(Py_buffer));
-    zeromem(&res->viewport_data_buffer, sizeof(Py_buffer));
-    zeromem(&res->render_data_buffer, sizeof(Py_buffer));
-    zeromem(&res->params, sizeof(RenderParameters));
-    zeromem(&res->viewport, sizeof(Viewport));
-
-    // --- Buffer Acquisition ---
-    if (res->uniforms)
-    {
-        if(PyObject_GetBuffer(res->uniform_layout, &res->uniform_layout_buffer, PyBUF_SIMPLE)) goto fail;
-        if(PyObject_GetBuffer(res->uniform_data, &res->uniform_data_buffer, PyBUF_SIMPLE)) goto fail;
-    }
-
-    return res;
-
-fail:
-    Py_XDECREF(shader_bytes);
-    Py_XDECREF(uniforms_proxy);
-    Py_XDECREF(uniform_layout);
-    Py_XDECREF(uniform_data_blob);
-    Py_XDECREF(tuple);
-    Py_XDECREF(resource_bindings);
-    Py_XDECREF(descriptor_set);
-    if (res) Py_DECREF(res);
-    
-    return NULL;
-}
-
-// --- Buffer Object Methods ---
-
-static PyObject *Buffer_meth_write_texture_handle(const Buffer *self, PyObject *args, PyObject *kwargs)
-{
-    static char *keywords[] = {"offset", "image", NULL};
-    PyObject *image_obj;
-    int offset;
-
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "iO", keywords, &offset, &image_obj))
-        return NULL;
-
-    if (!PyObject_TypeCheck(image_obj, self->ctx->module_state->Image_type)) {
-        PyErr_SetString(PyExc_TypeError, "Argument must be an Image object");
-        return NULL;
-    }
-
-    Image *img = (Image *)image_obj;
-
-    // Auto-fetch handle if missing
-    if (img->bindless_handle == 0) {
-        if (!glGetTextureHandleARB) {
-            PyErr_SetString(PyExc_RuntimeError, "Bindless not supported");
-            return NULL;
-        }
-        PyMutex_Lock(&self->ctx->state_lock);
-        img->bindless_handle = glGetTextureHandleARB(img->image);
-        PyMutex_Unlock(&self->ctx->state_lock);
-        if (img->bindless_handle == 0) {
-            PyErr_SetString(PyExc_RuntimeError, "Failed to get texture handle");
-            return NULL;
-        }
-    }
-
-    if (offset < 0 || offset + sizeof(GLuint64) > (size_t)self->size) {
-        PyErr_SetString(PyExc_ValueError, "Offset out of bounds");
-        return NULL;
-    }
-
-    // Write handle
-    if (self->mapped_ptr) {
-        // If mapped (persistent SSBO), write directly
-        PyMutex_Lock(&self->ctx->state_lock);
-        *(GLuint64 *)((char *)self->mapped_ptr + offset) = img->bindless_handle;
-        PyMutex_Unlock(&self->ctx->state_lock);
-    } else {
-        // Otherwise use SubData
-        PyMutex_Lock(&self->ctx->state_lock);
-        glBindBuffer(self->target, self->buffer);
-        glBufferSubData(self->target, offset, sizeof(GLuint64), &img->bindless_handle);
-        PyMutex_Unlock(&self->ctx->state_lock);
-    }
-
-    Py_RETURN_NONE;
-}
-
-static PyObject *Buffer_meth_write(const Buffer *self, PyObject *args, PyObject *kwargs)
-{
-    static char *keywords[] = {"data", "offset", NULL};
-    PyObject *data;
-    int offset = 0;
-
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|i", keywords, &data, &offset)) {
-        return NULL;
-    }
-
-    VALIDATE(!self->ctx->is_lost, PyExc_RuntimeError, "the context is lost");
-    VALIDATE(offset >= 0 && offset <= self->size, PyExc_ValueError, "invalid offset");
-
-    BufferView *buffer_view = NULL;
-    if (Py_TYPE(data) == self->ctx->module_state->Buffer_type) {
-        buffer_view = (BufferView *)PyObject_CallMethod(data, "view", NULL);
-    } else if (Py_TYPE(data) == self->ctx->module_state->BufferView_type) {
-        buffer_view = (BufferView *)new_ref(data);
-    }
-
-    if (buffer_view) {
-        if (buffer_view->size + offset > self->size) {
-            Py_DECREF(buffer_view);
-            PyErr_Format(PyExc_ValueError, "invalid size");
-            return NULL;
-        }
-
-        PyMutex_Lock(&self->ctx->state_lock); 
-        
-        glBindBuffer(GL_COPY_READ_BUFFER, buffer_view->buffer->buffer);
-        glBindBuffer(GL_COPY_WRITE_BUFFER, self->buffer);
-        glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, buffer_view->offset, offset, buffer_view->size);
-        glBindBuffer(GL_COPY_READ_BUFFER, 0);
-        glBindBuffer(GL_COPY_WRITE_BUFFER, 0);
-        
-        PyMutex_Unlock(&self->ctx->state_lock); 
-        
-        Py_DECREF(buffer_view);
-        Py_RETURN_NONE;
-    }
-
-    PyObject *mem = PyMemoryView_GetContiguous(data, PyBUF_READ, 'C');
-    if (!mem) return NULL;
-
-    Py_buffer view;
-    if (PyObject_GetBuffer(mem, &view, PyBUF_SIMPLE)) {
-        Py_DECREF(mem);
-        return NULL;
-    }
-
-    int data_size = (int)view.len;
-    if (data_size + offset > self->size) {
-        PyBuffer_Release(&view);
-        Py_DECREF(mem);
-        PyErr_Format(PyExc_ValueError, "invalid size");
-        return NULL;
-    }
-
-    if (data_size > 0) {
-        PyMutex_Lock(&self->ctx->state_lock); 
-
-        // Logic to prevent breaking VAO/Descriptor state
-        if (self->target == GL_ELEMENT_ARRAY_BUFFER) {
-            bind_vertex_array_internal(self->ctx, 0); 
-        }
-
-        if (self->target == GL_UNIFORM_BUFFER) {
-            Py_XSETREF(self->ctx->current_descriptor_set, NULL);
-        }
-
-        // Use a neutral binding point (GL_COPY_WRITE_BUFFER)
-        glBindBuffer(GL_COPY_WRITE_BUFFER, self->buffer);
-        glBufferSubData(GL_COPY_WRITE_BUFFER, offset, data_size, view.buf);
-        glBindBuffer(GL_COPY_WRITE_BUFFER, 0);
-
-        PyMutex_Unlock(&self->ctx->state_lock);
-    }
-
-    PyBuffer_Release(&view);
-    Py_DECREF(mem);
-    Py_RETURN_NONE;
-}
-
-static PyObject *Buffer_meth_read(Buffer *self, PyObject *args, PyObject *kwargs)
-{
-    static char *keywords[] = {"size", "offset", "into", NULL};
-
-    PyObject *size_arg = Py_None;
-    int offset = 0;
-    PyObject *into = Py_None;
-
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|OiO", keywords, &size_arg, &offset, &into))
-    {
-        return NULL;
-    }
-
-    if (self->ctx->is_lost)
-    {
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
-        return NULL;
-    }
-
-    if (offset < 0 || offset > self->size)
-    {
-        PyErr_Format(PyExc_ValueError, "invalid offset");
-        return NULL;
-    }
-
-    if (size_arg != Py_None && !PyLong_CheckExact(size_arg))
-    {
-        PyErr_Format(PyExc_TypeError, "the size must be an int");
-        return NULL;
-    }
-
-    int size = self->size - offset;
-    if (size_arg != Py_None)
-    {
-        size = to_int(size_arg);
-        if (size < 0)
-        {
-            PyErr_Format(PyExc_ValueError, "invalid size");
-            return NULL;
-        }
-    }
-
-    if (size < 0 || size + offset > self->size)
-    {
-        PyErr_Format(PyExc_ValueError, "invalid size");
-        return NULL;
-    }
-
-    if (self->target == GL_ELEMENT_ARRAY_BUFFER)
-    {
-        bind_vertex_array(self->ctx, 0);
-    }
-
-    if (self->target == GL_UNIFORM_BUFFER)
-    {
-        self->ctx->current_descriptor_set = NULL;
-    }
-
-    glBindBuffer(self->target, self->buffer);
-
-    if (into == Py_None)
-    {
-        PyObject *res = PyBytes_FromStringAndSize(NULL, size);
-        glGetBufferSubData(self->target, offset, size, PyBytes_AsString(res));
-        return res;
-    }
-
-    if (Py_TYPE(into) == self->ctx->module_state->Buffer_type)
-    {
-        PyObject *chunk = PyObject_CallMethod((PyObject *)self, "view", "(ii)", size, offset);
-        return PyObject_CallMethod(into, "write", "(N)", chunk);
-    }
-
-    if (Py_TYPE(into) == self->ctx->module_state->BufferView_type)
-    {
-        BufferView *buffer_view = (BufferView *)into;
-        if (size > buffer_view->size)
-        {
-            PyErr_Format(PyExc_ValueError, "invalid size");
-            return NULL;
-        }
-        PyObject *chunk = PyObject_CallMethod((PyObject *)self, "view", "(ii)", size, offset);
-        return PyObject_CallMethod((PyObject *)buffer_view->buffer, "write", "(Ni)", chunk, buffer_view->offset);
-    }
-
-    Py_buffer view;
-    if (PyObject_GetBuffer(into, &view, PyBUF_WRITABLE))
-    {
-        return NULL;
-    }
-
-    if (size > (int)view.len)
-    {
-        PyErr_Format(PyExc_ValueError, "invalid size");
-        return NULL;
-    }
-
-    Py_BEGIN_ALLOW_THREADS 
-    glBindBuffer(self->target, self->buffer);
-    glGetBufferSubData(self->target, offset, size, view.buf);
-    Py_END_ALLOW_THREADS
-    
-    PyBuffer_Release(&view);
-    Py_RETURN_NONE;
-}
-
-static BufferView *Buffer_meth_view(Buffer *self, PyObject *args, PyObject *kwargs)
-{
-    static char *keywords[] = {"size", "offset", NULL};
-
-    PyObject *size_arg = Py_None;
-    int offset = 0;
-
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|Oi", keywords, &size_arg, &offset))
-    {
-        return NULL;
-    }
-
-    int size = self->size - offset;
-    if (size_arg != Py_None)
-    {
-        size = to_int(size_arg);
-    }
-
-    if (self->ctx->is_lost)
-    {
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
-        return NULL;
-    }
-
-    if (offset < 0 || offset > self->size)
-    {
-        PyErr_Format(PyExc_ValueError, "invalid offset");
-        return NULL;
-    }
-
-    if (size < 0 || offset + size > self->size)
-    {
-        PyErr_Format(PyExc_ValueError, "invalid size");
-        return NULL;
-    }
-
-    BufferView *res = PyObject_New(BufferView, self->ctx->module_state->BufferView_type);
-    res->buffer = (Buffer *)new_ref(self);
-    res->offset = offset;
-    res->size = size;
-    return res;
-}
-
-// --- Image Object Methods ---
 
 static PyObject *Image_meth_clear(const Image *self, PyObject *args) {
     if (self->ctx->is_lost) {
@@ -4881,7 +4380,342 @@ static int Image_set_clear_value(Image *self, PyObject *value, void *closure)
     return 0;
 }
 
-// --- Pipeline Object Methods ---
+
+// -----------------------------------------------------------------------------
+// Type: Pipeline
+// -----------------------------------------------------------------------------
+
+static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *kwargs)
+{
+    // 1. Variable Declarations
+    PyObject *create_kwargs = NULL;
+    GLObject *program = NULL;
+    PyObject *uniform_layout = NULL;
+    PyObject *validate = NULL;
+    PyObject *layout_bindings = NULL;
+    PyObject *framebuffer_attachments = NULL;
+    PyObject *vertex_array_bindings = NULL;
+    PyObject *resource_bindings = NULL;
+    PyObject *settings = NULL;
+    PyObject *uniforms = NULL; 
+    PyObject *uniform_data = NULL;
+    GLObject *framebuffer = NULL;
+    GLObject *vertex_array = NULL;
+    DescriptorSet *descriptor_set = NULL;
+    GlobalSettings *global_settings = NULL;
+    Pipeline *res = NULL;
+
+    // 2. Argument Parsing
+    static char *keywords[] = {
+        "vertex_shader", "fragment_shader", "layout", "resources", "uniforms",
+        "depth", "stencil", "blend", "framebuffer", "vertex_buffers",
+        "index_buffer", "short_index", "cull_face", "topology", "vertex_count",
+        "instance_count", "first_vertex", "viewport", "uniform_data",
+        "viewport_data", "render_data", "includes", NULL,
+    };
+
+    PyObject *vertex_shader = NULL;
+    PyObject *fragment_shader = NULL;
+    PyObject *layout = self->module_state->empty_tuple;
+    PyObject *resources = self->module_state->empty_tuple;
+    PyObject *arg_uniforms = Py_None; 
+    PyObject *depth = Py_None;
+    PyObject *stencil = Py_None;
+    PyObject *blend = Py_None;
+    PyObject *framebuffer_arg = NULL;
+    PyObject *vertex_buffers = self->module_state->empty_tuple;
+    PyObject *index_buffer = Py_None;
+    int short_index = 0;
+    PyObject *cull_face = self->module_state->str_none;
+    PyObject *topology_arg = self->module_state->str_triangles;
+    int vertex_count = 0;
+    int instance_count = 1;
+    int first_vertex = 0;
+    PyObject *viewport = Py_None;
+    PyObject *arg_uniform_data = Py_None; 
+    PyObject *viewport_data = Py_None;
+    PyObject *render_data = Py_None;
+    PyObject *includes = Py_None;
+
+    if (PyTuple_Size(args) || !kwargs) {
+        PyErr_Format(PyExc_TypeError, "pipeline only takes keyword-only arguments");
+        return NULL;
+    }
+
+    Pipeline *template = (Pipeline *)PyDict_GetItemString(kwargs, "template");
+    if (template && Py_TYPE((PyObject *)template) != self->module_state->Pipeline_type) {
+        PyErr_Format(PyExc_ValueError, "invalid template");
+        return NULL;
+    }
+
+    if (template) {
+        if (PyDict_GetItemString(kwargs, "vertex_shader") || 
+            PyDict_GetItemString(kwargs, "fragment_shader") || 
+            PyDict_GetItemString(kwargs, "layout") || 
+            PyDict_GetItemString(kwargs, "includes")) {
+            PyErr_Format(PyExc_ValueError, "cannot use template with shader/layout/includes specified");
+            return NULL;
+        }
+        create_kwargs = PyDict_Copy(template->create_kwargs);
+        if (!create_kwargs) goto fail;
+        PyDict_Update(create_kwargs, kwargs);
+        PyDict_DelItemString(create_kwargs, "template");
+    } else {
+        create_kwargs = PyDict_Copy(kwargs);
+        if (!create_kwargs) goto fail;
+    }
+
+    if (!PyArg_ParseTupleAndKeywords(args, create_kwargs, "|$O!O!OOOOOOOOOpOOiiiOOOOO", keywords,
+        &PyUnicode_Type, &vertex_shader, &PyUnicode_Type, &fragment_shader, &layout, &resources,
+        &arg_uniforms, &depth, &stencil, &blend, &framebuffer_arg, &vertex_buffers, &index_buffer,
+        &short_index, &cull_face, &topology_arg, &vertex_count, &instance_count, &first_vertex,
+        &viewport, &arg_uniform_data, &viewport_data, &render_data, &includes))
+    {
+        goto fail;
+    }
+
+    if (self->is_lost) { PyErr_SetString(PyExc_RuntimeError, "context lost"); goto fail; }
+    if (!vertex_shader || !fragment_shader || !framebuffer_arg) { PyErr_SetString(PyExc_TypeError, "missing required args"); goto fail; }
+
+    Viewport viewport_value;
+    if (!to_viewport(&viewport_value, viewport, 0, 0, 0, 0)) goto fail;
+
+    int topology;
+    if (!get_topology(self->module_state, self->module_state->helper, topology_arg, &topology)) goto fail;
+
+    // 4. Logic & Creation
+    if (template) {
+        program = (GLObject *)new_ref(template->program);
+        Atomic_Increment(&program->uses);
+    } else {
+        program = compile_program(self, includes != Py_None ? includes : self->includes, vertex_shader, fragment_shader, layout);
+    }
+    if (!program) goto fail;
+
+    if (arg_uniforms != Py_None)
+    {
+        PyObject *tuple = PyObject_CallMethod(self->module_state->helper, "uniforms", "(OOO)", program->extra, arg_uniforms, arg_uniform_data);
+        if (!tuple) goto fail;
+
+        PyObject *item0 = PyTuple_GetItem(tuple, 0); 
+        PyObject *item1 = PyTuple_GetItem(tuple, 1); 
+        PyObject *item2 = PyTuple_GetItem(tuple, 2); 
+
+        uniforms = PyDictProxy_New(item0);
+        if (!uniforms) { Py_DECREF(tuple); goto fail; }
+
+        uniform_layout = new_ref(item1);    
+        uniform_data = new_ref(item2);      
+        Py_DECREF(tuple);
+    } else {
+        uniforms = NULL;
+        if (arg_uniform_data != Py_None) {
+            uniform_data = new_ref(arg_uniform_data); 
+        } else {
+            uniform_data = NULL;
+        }
+    }
+
+    validate = PyObject_CallMethod(self->module_state->helper, "validate", "(OOOOO)", program->extra, layout, resources, vertex_buffers, self->info_dict);
+    if (!validate) goto fail;
+
+    layout_bindings = PyObject_CallMethod(self->module_state->helper, "layout_bindings", "(O)", layout);
+    if (!layout_bindings) goto fail;
+
+    int layout_count = (int)PyList_Size(layout_bindings);
+    if (layout_count > 0) {
+        PyMutex_Lock(&self->state_lock);
+        int prev_program = self->current_program;
+        bind_program_internal(self, program->obj);
+        for (int i = 0; i < layout_count; ++i) {
+            PyObject *obj = PyList_GetItem(layout_bindings, i);
+            PyObject *name = PyTuple_GetItem(obj, 0);
+            int binding = to_int(PyTuple_GetItem(obj, 1));
+            
+            const char *name_str = PyUnicode_AsUTF8(name);
+            if (!name_str) {
+                PyMutex_Unlock(&self->state_lock);
+                goto fail;
+            }
+
+            int location = glGetUniformLocation(program->obj, name_str);
+            if (location >= 0) glUniform1i(location, binding);
+            else {
+                GLuint index = glGetUniformBlockIndex(program->obj, name_str);
+                if (index != GL_INVALID_INDEX) {
+                    glUniformBlockBinding(program->obj, index, (GLuint)binding);
+                }
+            }
+        }
+        bind_program_internal(self, prev_program);
+        PyMutex_Unlock(&self->state_lock);
+    }
+
+    framebuffer_attachments = PyObject_CallMethod(self->module_state->helper, "framebuffer_attachments", "(O)", framebuffer_arg);
+    if (!framebuffer_attachments) goto fail;
+
+    if (framebuffer_attachments != Py_None && viewport == Py_None) {
+        PyObject *size = PyTuple_GetItem(framebuffer_attachments, 0);
+        viewport_value.width = to_int(PyTuple_GetItem(size, 0));
+        viewport_value.height = to_int(PyTuple_GetItem(size, 1));
+    }
+
+    framebuffer = build_framebuffer(self, framebuffer_attachments);
+    if (!framebuffer) goto fail;
+
+    vertex_array_bindings = PyObject_CallMethod(self->module_state->helper, "vertex_array_bindings", "(OO)", vertex_buffers, index_buffer);
+    if (!vertex_array_bindings) goto fail;
+
+    vertex_array = build_vertex_array(self, vertex_array_bindings);
+    if (!vertex_array) goto fail;
+
+    resource_bindings = PyObject_CallMethod(self->module_state->helper, "resource_bindings", "(O)", resources);
+    if (!resource_bindings) goto fail;
+
+    descriptor_set = build_descriptor_set(self, resource_bindings);
+    if (!descriptor_set) goto fail;
+
+    settings = PyObject_CallMethod(self->module_state->helper, "settings", "(OOOOO)", cull_face, depth, stencil, blend, framebuffer_attachments);
+    if (!settings) goto fail;
+
+    global_settings = build_global_settings(self, settings);
+    if (!global_settings) goto fail;
+
+    // 5. Allocation
+    res = PyObject_GC_New(Pipeline, self->module_state->Pipeline_type);
+    if (!res) goto fail;
+    
+    // Init pointers to NULL
+    res->ctx = NULL;
+    res->create_kwargs = NULL;
+    res->framebuffer = NULL;
+    res->vertex_array = NULL;
+    res->program = NULL;
+    res->uniforms = NULL;
+    res->uniform_layout = NULL;
+    res->uniform_data = NULL;
+    res->descriptor_set = NULL;
+    res->global_settings = NULL;
+    res->viewport_data = NULL;
+    res->render_data = NULL;
+    
+    zeromem(&res->uniform_layout_buffer, sizeof(Py_buffer));
+    zeromem(&res->uniform_data_buffer, sizeof(Py_buffer));
+    zeromem(&res->viewport_data_buffer, sizeof(Py_buffer));
+    zeromem(&res->render_data_buffer, sizeof(Py_buffer));
+    zeromem(&res->params, sizeof(RenderParameters));
+    zeromem(&res->viewport, sizeof(Viewport));
+
+    res->ctx = self;
+    Py_INCREF(self); 
+
+    // Steal References (Ownership transfer from locals to struct)
+    res->create_kwargs = create_kwargs; create_kwargs = NULL;
+    res->framebuffer = framebuffer; framebuffer = NULL;
+    res->vertex_array = vertex_array; vertex_array = NULL;
+    res->program = program; program = NULL;
+    res->uniforms = uniforms; uniforms = NULL;
+    res->uniform_layout = uniform_layout; uniform_layout = NULL;
+    res->uniform_data = uniform_data; uniform_data = NULL;
+    res->descriptor_set = descriptor_set; descriptor_set = NULL;
+    res->global_settings = global_settings; global_settings = NULL;
+
+    res->topology = topology;
+    res->viewport = viewport_value;
+    res->params.vertex_count = vertex_count;
+    res->params.instance_count = instance_count;
+    res->params.first_vertex = first_vertex;
+    res->index_type = (index_buffer != Py_None) ? (short_index ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT) : 0;
+    res->index_size = short_index ? 2 : 4;
+
+    // 6. MemoryViews
+    if (viewport_data == Py_None) {
+        Py_buffer view = {0};
+        view.buf = (void*)&res->viewport;
+        view.len = sizeof(Viewport);
+        view.readonly = 0;
+        view.itemsize = 1;
+        view.format = NULL;
+        view.ndim = 1;
+        view.shape = &view.len;
+        view.strides = &view.itemsize;
+        view.suboffsets = NULL;
+        view.obj = (PyObject*)res; 
+        Py_INCREF(res); 
+
+        res->viewport_data = PyMemoryView_FromBuffer(&view);
+        if (!res->viewport_data) {
+            Py_DECREF(res); 
+            goto fail;
+        }
+    } else {
+        res->viewport_data = new_ref(viewport_data);
+    }
+
+    if (render_data == Py_None) {
+        Py_buffer view = {0};
+        view.buf = (void*)&res->params;
+        view.len = sizeof(RenderParameters);
+        view.readonly = 0;
+        view.itemsize = 1;
+        view.format = NULL;
+        view.ndim = 1;
+        view.shape = &view.len;
+        view.strides = &view.itemsize;
+        view.suboffsets = NULL;
+        view.obj = (PyObject*)res;
+        Py_INCREF(res);
+
+        res->render_data = PyMemoryView_FromBuffer(&view);
+        if (!res->render_data) {
+            Py_DECREF(res);
+            goto fail;
+        }
+    } else {
+        res->render_data = new_ref(render_data);
+    }
+
+    // 7. Buffer Acquisition
+    if (PyObject_GetBuffer(res->viewport_data, &res->viewport_data_buffer, PyBUF_SIMPLE) < 0) goto fail;
+    if (PyObject_GetBuffer(res->render_data, &res->render_data_buffer, PyBUF_SIMPLE) < 0) goto fail;
+
+    if (res->uniforms) {
+        if (PyObject_GetBuffer(res->uniform_layout, &res->uniform_layout_buffer, PyBUF_SIMPLE) < 0) goto fail;
+        if (PyObject_GetBuffer(res->uniform_data, &res->uniform_data_buffer, PyBUF_SIMPLE) < 0) goto fail;
+    }
+
+    PyObject_GC_Track(res); 
+
+    Py_XDECREF(validate); 
+    Py_XDECREF(layout_bindings); 
+    Py_XDECREF(framebuffer_attachments);
+    Py_XDECREF(vertex_array_bindings); 
+    Py_XDECREF(resource_bindings); 
+    Py_XDECREF(settings);
+    
+    return res;
+
+fail:
+    Py_XDECREF(create_kwargs);
+    Py_XDECREF(program);
+    Py_XDECREF(uniforms);
+    Py_XDECREF(uniform_layout);
+    Py_XDECREF(uniform_data);
+    if (framebuffer) Py_DECREF(framebuffer);
+    if (vertex_array) Py_DECREF(vertex_array);
+    if (descriptor_set) Py_DECREF(descriptor_set);
+    if (global_settings) Py_DECREF(global_settings);
+    
+    Py_XDECREF(validate); 
+    Py_XDECREF(layout_bindings); 
+    Py_XDECREF(framebuffer_attachments);
+    Py_XDECREF(vertex_array_bindings); 
+    Py_XDECREF(resource_bindings); 
+    Py_XDECREF(settings);
+    
+    if (res) Py_DECREF(res);
+    return NULL;
+}
 
 static int Pipeline_traverse(const Pipeline *self, visitproc visit, void *arg) {
     Py_VISIT(self->ctx);
@@ -5099,6 +4933,170 @@ static int Pipeline_set_viewport(Pipeline *self, PyObject *viewport, void *closu
     return 0;
 }
 
+
+// -----------------------------------------------------------------------------
+// Type: Compute
+// -----------------------------------------------------------------------------
+
+static PyObject *Compute_meth_run(Compute *self, PyObject *args)
+{
+    int x = 1, y = 1, z = 1;
+    if (!PyArg_ParseTuple(args, "|iii", &x, &y, &z)) return NULL;
+
+    VALIDATE(x > 0 && y > 0 && z > 0, PyExc_ValueError, 
+        "Dispatch dimensions must be positive");
+
+    if (self->ctx->is_lost) {
+        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        return NULL;
+    }
+
+    PyMutex_Lock(&self->ctx->state_lock);
+
+    bind_program_internal(self->ctx, self->program->obj);
+
+    bind_descriptor_set(self->ctx, self->descriptor_set);
+
+    if (self->uniforms) {
+        bind_uniforms((Pipeline *)self); 
+    }
+    glDispatchCompute(x, y, z);
+    glMemoryBarrier(GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
+    // glMemoryBarrier(GL_ALL_BARRIER_BITS); // sanity check
+    PyMutex_Unlock(&self->ctx->state_lock);
+
+    Py_RETURN_NONE;
+}
+
+static Compute *Context_meth_compute(Context *self, PyObject *args, PyObject *kwargs)
+{
+    static char *keywords[] = {"compute_shader", "resources", "uniforms", "uniform_data", NULL};
+    
+    PyObject *compute_shader = NULL;
+    PyObject *resources = self->module_state->empty_tuple;
+    PyObject *uniforms_arg = Py_None;
+    PyObject *uniform_data = Py_None;
+    PyObject *shader_bytes = NULL;
+    GLObject *program = NULL;
+    PyObject *uniforms_proxy = NULL;
+    PyObject *uniform_layout = NULL;
+    PyObject *uniform_data_blob = NULL;
+    PyObject *resource_bindings = NULL;
+    DescriptorSet *descriptor_set = NULL;
+    Compute *res = NULL;
+    PyObject *tuple = NULL;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|OOO", keywords, 
+        &compute_shader, &resources, &uniforms_arg, &uniform_data))
+    {
+        return NULL; 
+    }
+
+    // --- Shader Processing ---
+    if (PyUnicode_Check(compute_shader)) {
+        shader_bytes = PyUnicode_AsUTF8String(compute_shader);
+        if (!shader_bytes) goto fail;
+    } else if (PyBytes_Check(compute_shader)) {
+        shader_bytes = compute_shader;
+        Py_INCREF(shader_bytes);
+    } else {
+        PyErr_Format(PyExc_TypeError, "compute_shader must be str or bytes");
+        goto fail;
+    }
+
+    program = compile_compute_program(self, NULL, shader_bytes);
+    Py_CLEAR(shader_bytes); 
+    if (!program) goto fail;
+
+    // --- Uniforms Processing ---
+    if (uniforms_arg != Py_None)
+    {
+        tuple = PyObject_CallMethod(self->module_state->helper, "uniforms", "(OOO)", 
+            program->extra, uniforms_arg, uniform_data);
+        
+        if (!tuple) goto fail;
+
+        PyObject *uniform_dict = PyTuple_GetItem(tuple, 0);
+        if (!uniform_dict || !PyDict_Check(uniform_dict)) {
+            PyErr_Format(PyExc_RuntimeError, "uniforms helper returned invalid layout");
+            goto fail;
+        }
+        
+        uniforms_proxy = PyDictProxy_New(uniform_dict);
+        if (!uniforms_proxy) goto fail;
+
+        uniform_layout = PyTuple_GetItem(tuple, 1);
+        Py_XINCREF(uniform_layout);
+        
+        uniform_data_blob = PyTuple_GetItem(tuple, 2);
+        Py_XINCREF(uniform_data_blob);
+        
+        Py_CLEAR(tuple); 
+    }
+
+    // --- Resource Processing ---
+    resource_bindings = PyObject_CallMethod(self->module_state->helper, "resource_bindings", "(O)", resources);
+    if (!resource_bindings) goto fail;
+
+    descriptor_set = build_descriptor_set(self, resource_bindings);
+    Py_CLEAR(resource_bindings);
+    if (!descriptor_set) goto fail;
+
+    // --- Object Creation ---
+    res = PyObject_New(Compute, self->module_state->Compute_type);
+    if (!res) goto fail;
+
+    res->ctx = self;
+    res->program = program;
+    res->descriptor_set = descriptor_set;
+    res->uniforms = uniforms_proxy;
+    res->uniform_layout = uniform_layout;
+    res->uniform_data = uniform_data_blob;
+    res->workgroup_size = NULL;
+    res->create_kwargs = NULL;
+    res->global_settings = NULL;
+    res->framebuffer = NULL;
+    res->vertex_array = NULL;
+    res->viewport_data = NULL;
+    res->render_data = NULL;
+    res->topology = 0;
+    res->index_type = 0;
+    res->index_size = 0;
+
+    zeromem(&res->uniform_layout_buffer, sizeof(Py_buffer));
+    zeromem(&res->uniform_data_buffer, sizeof(Py_buffer));
+    zeromem(&res->viewport_data_buffer, sizeof(Py_buffer));
+    zeromem(&res->render_data_buffer, sizeof(Py_buffer));
+    zeromem(&res->params, sizeof(RenderParameters));
+    zeromem(&res->viewport, sizeof(Viewport));
+
+    // --- Buffer Acquisition ---
+    if (res->uniforms)
+    {
+        if(PyObject_GetBuffer(res->uniform_layout, &res->uniform_layout_buffer, PyBUF_SIMPLE)) goto fail;
+        if(PyObject_GetBuffer(res->uniform_data, &res->uniform_data_buffer, PyBUF_SIMPLE)) goto fail;
+    }
+
+    return res;
+
+fail:
+    Py_XDECREF(shader_bytes);
+    Py_XDECREF(uniforms_proxy);
+    Py_XDECREF(uniform_layout);
+    Py_XDECREF(uniform_data_blob);
+    Py_XDECREF(tuple);
+    Py_XDECREF(resource_bindings);
+    Py_XDECREF(descriptor_set);
+    if (res) Py_DECREF(res);
+    
+    return NULL;
+}
+
+
+// -----------------------------------------------------------------------------
+// Other Methods: Context Pack/NewFrame, Inspection, Helpers
+// -----------------------------------------------------------------------------
+
 static PyObject *
 Context_meth_pack_indirect(Context *self, PyObject *args, PyObject *kwargs)
 {
@@ -5251,7 +5249,6 @@ Context_meth_pack_indirect(Context *self, PyObject *args, PyObject *kwargs)
 
     return result;
 }
-
 
 static PyObject *Context_meth_new_frame(Context *self, PyObject *args, PyObject *kwargs)
 {
@@ -5717,7 +5714,10 @@ static PyObject *ImageFace_meth_blit(const ImageFace *self, PyObject *args, PyOb
     return blit_image_face(self, target, offset, size, crop, filter);
 }
 
-// --- Math Helpers ---
+
+// -----------------------------------------------------------------------------
+// Math & Camera Helper
+// -----------------------------------------------------------------------------
 
 typedef struct vec3 { double x, y, z; } vec3;
 
@@ -5800,7 +5800,10 @@ static PyObject *meth_camera(PyObject *self, PyObject *args, PyObject *kwargs)
     return PyBytes_FromStringAndSize((char *)res, 64);
 }
 
-// --- Deallocators ---
+
+// -----------------------------------------------------------------------------
+// Deallocators
+// -----------------------------------------------------------------------------
 
 static void Context_dealloc(Context *self)
 {
@@ -5991,7 +5994,10 @@ static void GLObject_dealloc(GLObject *self)
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
-// --- Type Defs & Module Init ---
+
+// -----------------------------------------------------------------------------
+// Python Module Definitions
+// -----------------------------------------------------------------------------
 
 static PyMethodDef Context_methods[] = {
     {"buffer", (PyCFunction)Context_meth_buffer, METH_VARARGS | METH_KEYWORDS, NULL},
@@ -6051,7 +6057,6 @@ static PyGetSetDef Image_getset[] = {
     {0}
 };
 
-
 static PyMemberDef Image_members[] = {
     {"size", T_OBJECT, offsetof(Image, size), READONLY, NULL},
     {"format", T_OBJECT, offsetof(Image, format), READONLY, NULL},
@@ -6109,6 +6114,11 @@ static PyMethodDef Compute_methods[] = {
     {0},
 };
 
+
+// -----------------------------------------------------------------------------
+// Type Slots & Specs
+// -----------------------------------------------------------------------------
+
 static PyType_Slot Context_slots[] = {
     {Py_tp_new, (void *)Context_new},
     {Py_tp_methods, Context_methods},
@@ -6145,8 +6155,6 @@ static PyType_Slot Pipeline_slots[] = {
     {Py_tp_getset, Pipeline_getset},
     {Py_tp_members, Pipeline_members},
     {Py_tp_dealloc, (void *)Pipeline_dealloc},
-        // No traverse needed for Pipeline in this version if no cycles? 
-        // Actually PyObject members exist, adding traverse/clear is safer.
     {Py_tp_traverse, (void *)Pipeline_traverse},
     {Py_tp_clear, (void *)Pipeline_clear},
     {0},
@@ -6192,7 +6200,7 @@ static PyType_Slot GLObject_slots[] = {
 
 static PyType_Spec Context_spec = {"hypergl.Context", sizeof(Context), 0, Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, Context_slots};
 static PyType_Spec Buffer_spec = {"hypergl.Buffer", sizeof(Buffer), 0, Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, Buffer_slots};
-static PyType_Spec Image_spec = {"hypergl.Image", sizeof(Image), 0, Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_GC, Image_slots}; // Py_TPFLAGS_BASETYPE: Subclassing
+static PyType_Spec Image_spec = {"hypergl.Image", sizeof(Image), 0, Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_GC, Image_slots};
 static PyType_Spec Pipeline_spec = {"hypergl.Pipeline", sizeof(Pipeline), 0, Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, Pipeline_slots};
 static PyType_Spec Compute_spec = {"hypergl.Compute", sizeof(Compute), 0, Py_TPFLAGS_DEFAULT, Compute_slots};
 static PyType_Spec ImageFace_spec = {"hypergl.ImageFace", sizeof(ImageFace), 0, Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, ImageFace_slots};
@@ -6200,6 +6208,11 @@ static PyType_Spec BufferView_spec = {"hypergl.BufferView", sizeof(BufferView), 
 static PyType_Spec DescriptorSet_spec = {"hypergl.DescriptorSet", sizeof(DescriptorSet), 0, Py_TPFLAGS_DEFAULT, DescriptorSet_slots};
 static PyType_Spec GlobalSettings_spec = {"hypergl.GlobalSettings", sizeof(GlobalSettings), 0, Py_TPFLAGS_DEFAULT, GlobalSettings_slots};
 static PyType_Spec GLObject_spec = {"hypergl.GLObject", sizeof(GLObject), 0, Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, GLObject_slots};
+
+
+// -----------------------------------------------------------------------------
+// Module Execution & Registration
+// -----------------------------------------------------------------------------
 
 static int module_exec(PyObject *self)
 {
