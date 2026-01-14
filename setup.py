@@ -73,6 +73,7 @@ elif sys.platform.startswith('linux'):
     extra_compile_args += ['-std=c11', '-O3', '-fPIC']
 elif sys.platform.startswith('darwin'):
     extra_compile_args += ['-Wno-writable-strings', '-std=c11']
+    extra_link_args += ['-framework', 'OpenGL', '-framework', 'CoreFoundation']
 
 # --- Environment Toggles ---
 if os.getenv('HYPERGL_VALIDATE', '1') == '1':
