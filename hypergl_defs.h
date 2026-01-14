@@ -4,6 +4,24 @@
 #include <Python.h>
 #include <structmember.h>
 
+
+// --- Compiler Hints ---
+#if defined(__GNUC__) || defined(__clang__)
+    #define LIKELY(x)   __builtin_expect(!!(x), 1)
+    #define UNLIKELY(x) __builtin_expect(!!(x), 0)
+    #define FORCE_INLINE __attribute__((always_inline)) inline
+    #define NO_ALIAS    __restrict
+    #define PURE_FUNC   __attribute__((pure))
+    #define CONST_FUNC  __attribute__((const))
+#else
+    #define LIKELY(x)   (x)
+    #define UNLIKELY(x) (x)
+    #define FORCE_INLINE inline
+    #define NO_ALIAS
+    #define PURE_FUNC
+    #define CONST_FUNC
+#endif
+
 // --- Python 3.13+ Lock Shim ---
 #ifndef Py_MOD_GIL_NOT_USED
     #define Py_MOD_GIL_NOT_USED 0
@@ -366,6 +384,7 @@ typedef struct Buffer
     int size;
     int access;
     int is_persistently_mapped;
+    // int gpu_dirty; // TODO: implement this across every single GPU call
     void *mapped_ptr;
     PyObject *memoryview;
 } Buffer;
