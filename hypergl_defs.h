@@ -3,7 +3,6 @@
 
 #include <Python.h>
 #include <stdint.h>
-#include <structmember.h> // Useful for PyMemberDef macros if not included indirectly
 
 // --- Compiler Hints ---
 #if defined(__GNUC__) || defined(__clang__)
