@@ -353,7 +353,7 @@ static int load_gl(PyObject *loader)
         if (!_opt && PyErr_Occurred()) {           \
             PyErr_Clear();                        \
         }                                         \
-        memcpy(&(name), &_opt, sizeof(void*));    \
+        memcpy((void *)&(name), (const void *)&_opt, sizeof(void*));    \
     } while (0)
 
 

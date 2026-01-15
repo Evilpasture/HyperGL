@@ -156,7 +156,7 @@
     #define VALIDATE_LOCKED(ctx, cond, exc, fmt, ...) ((void)0)
 #endif
 
-#define GL_STATE_UNKNOWN  -1
+#define GL_STATE_UNKNOWN  (-1)
 #define GL_STATE_DISABLED  0
 #define GL_STATE_ENABLED   1
 
