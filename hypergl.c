@@ -5559,11 +5559,8 @@ static PyObject *Context_meth_pack_indirect(Context *self, PyObject *args,
         uint32_t baseInstance;
       } *out = (void *)current_struct_ptr;
 
-      unsigned long long val;
-      long long sval;
-
       // 1. count
-      val = PyLong_AsUnsignedLongLong(cmd_items[0]);
+      unsigned long long val = PyLong_AsUnsignedLongLong(cmd_items[0]);
       if (val == (unsigned long long)-1 && PyErr_Occurred())
         goto index_error;
       if (val > UINT32_MAX)
@@ -5588,7 +5585,7 @@ static PyObject *Context_meth_pack_indirect(Context *self, PyObject *args,
 
       if (inputs == 5) {
         // 4. baseVertex (Signed)
-        sval = PyLong_AsLongLong(cmd_items[3]);
+        const long long sval = PyLong_AsLongLong(cmd_items[3]);
         if (sval == -1 && PyErr_Occurred())
           goto index_error;
         if (sval < INT32_MIN || sval > INT32_MAX)
@@ -5634,10 +5631,8 @@ static PyObject *Context_meth_pack_indirect(Context *self, PyObject *args,
         uint32_t baseInstance;
       } *out = (void *)current_struct_ptr;
 
-      unsigned long long val;
-
       // 1. count
-      val = PyLong_AsUnsignedLongLong(cmd_items[0]);
+      unsigned long long val = PyLong_AsUnsignedLongLong(cmd_items[0]);
       if (val == (unsigned long long)-1 && PyErr_Occurred())
         goto array_error;
       if (val > UINT32_MAX)
@@ -5935,7 +5930,7 @@ static PyObject *Context_meth_release(Context *self, PyObject *arg) {
     PyObject *value;
     Py_ssize_t pos = 0;
     while (PyDict_Next(self->shader_cache, &pos, &key, &value)) {
-      GLObject *shader = (GLObject *)value;
+      const GLObject *shader = (GLObject *)value;
       // Shaders are GLObjects, so we must manually enqueue or trust their
       // dealloc. Since we are clearing the cache, we own the ref.
       if (!self->is_lost) {
@@ -5973,7 +5968,7 @@ static PyObject *inspect_descriptor_set(const DescriptorSet *set) {
 
   // 1. Uniform Buffers
   for (int i = 0; i < set->uniform_buffers.binding_count; ++i) {
-    Buffer *buf = set->uniform_buffers.binding[i].buffer;
+    const Buffer *buf = set->uniform_buffers.binding[i].buffer;
     if (buf) {
       PyObject *obj = Py_BuildValue(
           "{sssisisisi}", "type", "uniform_buffer", "binding", i, "buffer_id",
@@ -6007,8 +6002,8 @@ static PyObject *inspect_descriptor_set(const DescriptorSet *set) {
 
   // 3. Samplers / Bindless Textures
   for (int i = 0; i < set->samplers.binding_count; ++i) {
-    Image *img = set->samplers.binding[i].image;
-    GLObject *samp = set->samplers.binding[i].sampler;
+    const Image *img = set->samplers.binding[i].image;
+    const GLObject *samp = set->samplers.binding[i].sampler;
 
     if (img) {
       // Gather Image Details
@@ -6024,7 +6019,7 @@ static PyObject *inspect_descriptor_set(const DescriptorSet *set) {
       PyObject *dims =
           Py_BuildValue("(iii)", img->width, img->height, img->array);
 
-      int samp_id = samp ? samp->obj : 0;
+      const int samp_id = samp ? samp->obj : 0;
 
       PyObject *resident = img->is_resident ? Py_True : Py_False;
       PyObject *target = PyLong_FromLong(img->target);
@@ -6067,19 +6062,19 @@ static PyObject *inspect_descriptor_set(const DescriptorSet *set) {
 }
 
 static PyObject *meth_inspect(PyObject *self, PyObject *arg) {
-  ModuleState *module_state = (ModuleState *)PyModule_GetState(self);
+  const ModuleState *module_state = (ModuleState *)PyModule_GetState(self);
 
   if (Py_TYPE(arg) == module_state->Buffer_type) {
-    Buffer *buffer = (Buffer *)arg;
+    const Buffer *buffer = (Buffer *)arg;
     return Py_BuildValue("{sssi}", "type", "buffer", "buffer", buffer->buffer);
   }
   if (Py_TYPE(arg) == module_state->Image_type) {
-    Image *image = (Image *)arg;
+    const Image *image = (Image *)arg;
     const char *gltype = image->renderbuffer ? "renderbuffer" : "texture";
     return Py_BuildValue("{sssi}", "type", "image", gltype, image->image);
   }
   if (Py_TYPE(arg) == module_state->ImageFace_type) {
-    ImageFace *face = (ImageFace *)arg;
+    const ImageFace *face = (ImageFace *)arg;
     if (!face->framebuffer) {
       return Py_BuildValue("{ss}", "type", "image_face (uninitialized)");
     }
@@ -6119,7 +6114,7 @@ static PyObject *ImageFace_meth_clear(const ImageFace *self, PyObject *args) {
 
   PyMutex_Lock(&self->ctx->state_lock);
 
-  int prev_draw = self->ctx->current_draw_framebuffer;
+  const int prev_draw = self->ctx->current_draw_framebuffer;
 
   if (self->ctx->current_draw_framebuffer != self->framebuffer->obj) {
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, self->framebuffer->obj);
