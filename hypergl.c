@@ -4441,7 +4441,7 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
     }
 
     Pipeline *template = NULL;
-    PyObject *template_obj = PyDict_GetItemString(kwargs, "template");
+    template_obj = PyDict_GetItemString(kwargs, "template");
     if (template_obj) {
         Py_INCREF(template_obj);
         template = (Pipeline *)template_obj;
