@@ -906,55 +906,74 @@ UNUSED static int valid_mem(PyObject *mem, const Py_ssize_t size)
     return size < 0 || mem_size == size;
 }
 
-static int to_int_pair(IntPair *value, PyObject *obj, const int x, const int y)
+static int to_int_pair(IntPair *value, PyObject *obj,
+                       const int x, const int y)
 {
-    if (obj != Py_None)
-    {
-        if (PySequence_Size(obj) != 2)
-        {
-            return 0;
-        }
-        value->x = to_int(PySequence_GetItem(obj, 0));
-        value->y = to_int(PySequence_GetItem(obj, 1));
-        if (PyErr_Occurred())
-        {
-            PyErr_Clear();
-            return 0;
-        }
-    }
-    else
-    {
+    if (obj == Py_None) {
         value->x = x;
         value->y = y;
+        return 1;
     }
+
+    PyObject *seq = PySequence_Fast(obj, "[HyperGL] expected a sequence of 2 ints");
+    if (!seq)
+        return 0;
+
+    if (PySequence_Fast_GET_SIZE(seq) != 2) {
+        Py_DECREF(seq);
+        return 0;
+    }
+
+    PyObject **items = PySequence_Fast_ITEMS(seq);
+
+    value->x = to_int(items[0]);
+    value->y = to_int(items[1]);
+
+    Py_DECREF(seq);
+
+    if (PyErr_Occurred()) {
+        PyErr_Clear();
+        return 0;
+    }
+
     return 1;
 }
 
-static int to_viewport(Viewport *value, PyObject *obj, const int x, const int y, const int width, const int height)
+
+static int to_viewport(Viewport *value, PyObject *obj,
+                       int x, int y, int width, int height)
 {
-    if (obj != Py_None)
-    {
-        if (PySequence_Size(obj) != 4)
-        {
-            return 0;
-        }
-        value->x = to_int(PySequence_GetItem(obj, 0));
-        value->y = to_int(PySequence_GetItem(obj, 1));
-        value->width = to_int(PySequence_GetItem(obj, 2));
-        value->height = to_int(PySequence_GetItem(obj, 3));
-        if (PyErr_Occurred())
-        {
-            PyErr_Clear();
-            return 0;
-        }
-    }
-    else
-    {
+    if (obj == Py_None) {
         value->x = x;
         value->y = y;
         value->width = width;
         value->height = height;
+        return 1;
     }
+
+    PyObject *seq = PySequence_Fast(obj, "[HyperGL] viewport must be a sequence of 4 ints");
+    if (!seq)
+        return 0;
+
+    if (PySequence_Fast_GET_SIZE(seq) != 4) {
+        Py_DECREF(seq);
+        return 0;
+    }
+
+    PyObject **items = PySequence_Fast_ITEMS(seq);
+
+    value->x      = to_int(items[0]);
+    value->y      = to_int(items[1]);
+    value->width  = to_int(items[2]);
+    value->height = to_int(items[3]);
+
+    Py_DECREF(seq);
+
+    if (PyErr_Occurred()) {
+        PyErr_Clear();
+        return 0;
+    }
+
     return 1;
 }
 
@@ -5827,6 +5846,8 @@ static PyObject *ImageFace_meth_blit(const ImageFace *self, PyObject *args, PyOb
 // -----------------------------------------------------------------------------
 // Math & Camera Helper
 // -----------------------------------------------------------------------------
+static const double PI = 3.14159265358979323846;
+
 
 typedef struct vec3 { double x, y, z; } vec3;
 
@@ -5851,6 +5872,12 @@ static CONST_FUNC FORCE_INLINE vec3 cross(const vec3 a, const vec3 b) {
 static CONST_FUNC FORCE_INLINE double dot(const vec3 a, const vec3 b) {
     return (a.x * b.x) + (a.y * b.y) + (a.z * b.z);
 }
+
+static CONST_FUNC FORCE_INLINE double deg_to_rad(double deg)
+{
+    return deg * (PI / 180.0);
+}
+
 
 static PyObject *meth_camera(PyObject *self, PyObject *args, PyObject *kwargs)
 {
@@ -5891,12 +5918,12 @@ static PyObject *meth_camera(PyObject *self, PyObject *args, PyObject *kwargs)
             (float)(s.x / r2), (float)(u.x / r1), (float)(r3 * f.x), 0.0F,
             (float)(s.y / r2), (float)(u.y / r1), (float)(r3 * f.y), 0.0F,
             (float)(s.z / r2), (float)(u.z / r1), (float)(r3 * f.z), 0.0F,
-            (float)(t.x / r2), (float)(t.y / r1), (float)((r3 * t.z) - r4), 1.0f,
+            (float)(t.x / r2), (float)(t.y / r1), (float)((r3 * t.z) - r4), 1.0F,
         };
         return PyBytes_FromStringAndSize((char *)res, 64);
     }
 
-    const double r1 = tan(fov * 0.008726646259971647884618453842);
+    const double r1 = tan(deg_to_rad(fov * 0.5));
     const double r2 = r1 * aspect;
     const double r3 = clip ? zfar / (zfar - znear) : (zfar + znear) / (zfar - znear);
     const double r4 = clip ? (zfar * znear) / (zfar - znear) : (2.0 * zfar * znear) / (zfar - znear);
@@ -6361,7 +6388,7 @@ static int module_exec(PyObject *self)
     PyModule_AddObject(self, "Error", new_ref(state->HyperGLError));
 
     #define CREATE_TYPE(obj_type, spec) \
-        state->obj_type = (PyTypeObject *)PyType_FromModuleAndSpec(self, &spec, NULL); \
+        state->obj_type = (PyTypeObject *)PyType_FromModuleAndSpec(self, &(spec), NULL); \
         if (!state->obj_type) return -1;
 
     CREATE_TYPE(Context_type, Context_spec);
