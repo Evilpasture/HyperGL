@@ -986,4 +986,4 @@ def _clean_exit():
     os._exit(0)
 
 
-atexit.register(_clean_exit)
+# atexit.register(_clean_exit)
