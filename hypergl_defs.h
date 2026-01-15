@@ -45,10 +45,18 @@
 
 #if PY_VERSION_HEX < 0x030D0000
     typedef PyThread_type_lock PyMutex;
+    // SHIM: Ensure this is called once during module initialization!
+    static PyThread_type_lock global_init_lock = NULL; 
     
     static void PyMutex_Lock(PyMutex *m) {
+        // If m is null, we need to create the lock. 
+        // We assume global_init_lock was created in PyInit.
         if (*m == NULL) {
-            *m = PyThread_allocate_lock();
+            PyThread_acquire_lock(global_init_lock, 1);
+            if (*m == NULL) {
+                *m = PyThread_allocate_lock();
+            }
+            PyThread_release_lock(global_init_lock);
         }
         PyThread_acquire_lock(*m, 1);
     }
@@ -61,12 +69,14 @@
     
     // Shim for PyDict_GetItemRef (New in 3.13)
     static int PyDict_GetItemRef(PyObject *p, PyObject *key, PyObject **result) {
-        *result = PyDict_GetItem(p, key);
-        if (*result) {
-            Py_INCREF(*result);
-            return 1; // Found
+        PyObject *tmp = PyDict_GetItem(p, key); // Borrowed
+        if (tmp) {
+            Py_INCREF(tmp); // Now owned
+            *result = tmp;
+            return 1;
         }
-        return 0; // Not found
+        *result = NULL;
+        return 0;
     }
 
     // Shim for PyDict_SetDefaultRef (New in 3.13)
@@ -77,7 +87,8 @@
             return 1; // Key existed
         }
         if (PyDict_SetItem(d, key, default_value) < 0) {
-            return -1; // Error
+            *result = NULL;
+            return -1;
         }
         *result = Py_NewRef(default_value);
         return 0; // New key inserted
