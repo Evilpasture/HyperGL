@@ -3,7 +3,7 @@
 
 #include <Python.h>
 #include <stdint.h>
-
+#include <structmember.h> // Useful for PyMemberDef macros if not included indirectly
 
 // --- Compiler Hints ---
 #if defined(__GNUC__) || defined(__clang__)
@@ -23,6 +23,8 @@
     #define CONST_FUNC
     #define UNUSED
 #endif
+
+// --- Integer Limits ---
 #ifdef UINT32_MAX
     #undef UINT32_MAX
     #define UINT32_MAX (4294967295U)
@@ -43,6 +45,7 @@
     #define Py_MOD_GIL_NOT_USED 0
 #endif
 
+// Support for Python < 3.13 which doesn't have PyMutex
 #if PY_VERSION_HEX < 0x030D0000
     typedef PyThread_type_lock PyMutex;
     // SHIM: Ensure this is called once during module initialization!
@@ -425,18 +428,21 @@ typedef struct Context
     int current_depth_mask;
     int current_stencil_mask;
     int default_texture_unit;
-    int is_lost;
-    int is_gles;
-    int is_webgl;
+    
+    // UPDATED: 'char' to match Py_T_BOOL expectations
+    char is_lost; 
+    char is_gles;
+    char is_webgl;
+    
+    // Bitfields are generally fine, but ensure careful access
     unsigned int is_mask_default      : 1;
     unsigned int is_stencil_default   : 1;
     unsigned int is_blend_default     : 1;
     unsigned int padding_bits         : 5;
+    
     GLStateShadow gl_state;
     Viewport current_viewport;
 } Context;
-
-
 
 typedef struct Buffer
 {
@@ -473,7 +479,10 @@ typedef struct Image
     int array;
     int cubemap;
     int target;
-    int renderbuffer;
+    
+    // UPDATED: 'char' to match Py_T_BOOL
+    char renderbuffer;
+    
     int layer_count;
     int level_count;
 
