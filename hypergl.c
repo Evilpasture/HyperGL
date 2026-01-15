@@ -379,6 +379,13 @@ static void load_gl(PyObject *loader)
         return NULL; \
     }
 
+#define INTERNAL_CHECK_LOCKED(condition, message, lock) \
+    if (!(condition)) { \
+        PyMutex_Unlock(lock); \
+        PyErr_SetString(PyExc_RuntimeError, "HyperGL Internal Error: " message); \
+        return NULL; \
+    }
+
 
 // -----------------------------------------------------------------------------
 // Helper Functions (State Binding & Internals)
@@ -426,7 +433,7 @@ static void bind_uniforms(const Pipeline *self)
         case 24: glUniformMatrix4fv(header->binding[i].location, header->binding[i].count, 0, ptr); break;
         default:
             #ifdef DEBUG
-            fprintf(stderr, "Invalid uniform function id: %d\n", header->binding[i].function);
+            fprintf(stderr, "[HyperGL] Invalid uniform function id: %d\n", header->binding[i].function);
             #endif
             break;
         }
@@ -1111,7 +1118,7 @@ static GLObject *build_vertex_array(Context *self, PyObject *bindings) // HAS GC
     int length = (int)PyTuple_Size(bindings);
     PyObject *index_buffer = PyTuple_GetItem(bindings, 0);
     if (index_buffer != Py_None && !PyObject_TypeCheck(index_buffer, self->module_state->Buffer_type)) {
-        PyErr_SetString(PyExc_TypeError, "index_buffer must be a Buffer");
+        PyErr_SetString(PyExc_TypeError, "[HyperGL] index_buffer must be a Buffer");
         return NULL;
     }
 
@@ -1289,13 +1296,13 @@ static DescriptorSetBuffers build_descriptor_set_buffers(const Context *self, Py
     zeromem(&res, sizeof(res));
 
     if (!PyTuple_Check(bindings)) {
-        PyErr_SetString(PyExc_TypeError, "buffer bindings must be a tuple");
+        PyErr_SetString(PyExc_TypeError, "[HyperGL] buffer bindings must be a tuple");
         return res;
     }
 
     int length = (int)PyTuple_Size(bindings);
     if ((length % 4) != 0) {
-        PyErr_SetString(PyExc_TypeError, "buffer bindings must be (binding, buffer, offset, size) quads");
+        PyErr_SetString(PyExc_TypeError, "[HyperGL] buffer bindings must be (binding, buffer, offset, size) quads");
         return res;
     }
 
@@ -1305,19 +1312,19 @@ static DescriptorSetBuffers build_descriptor_set_buffers(const Context *self, Py
         if (PyErr_Occurred()) goto error_cleanup;
 
         if (binding < 0 || binding >= MAX_BUFFER_BINDINGS) {
-            PyErr_Format(PyExc_IndexError, "Buffer binding %d exceeds MAX_BUFFER_BINDINGS (%d)", 
+            PyErr_Format(PyExc_IndexError, "[HyperGL] Buffer binding %d exceeds MAX_BUFFER_BINDINGS (%d)", 
                          binding, MAX_BUFFER_BINDINGS);
             goto error_cleanup;
         }
 
         if (res.binding[binding].buffer) {
-            PyErr_Format(PyExc_ValueError, "duplicate buffer binding %d", binding);
+            PyErr_Format(PyExc_ValueError, "[HyperGL] duplicate buffer binding %d", binding);
             goto error_cleanup;
         }
 
         PyObject *buf_obj = PyTuple_GetItem(bindings, i + 1);
         if (!PyObject_TypeCheck(buf_obj, self->module_state->Buffer_type)) {
-            PyErr_SetString(PyExc_TypeError, "binding index 1 must be a Buffer object");
+            PyErr_SetString(PyExc_TypeError, "[HyperGL] binding index 1 must be a Buffer object");
             goto error_cleanup;
         }
 
@@ -1325,7 +1332,7 @@ static DescriptorSetBuffers build_descriptor_set_buffers(const Context *self, Py
         int size = to_int(PyTuple_GetItem(bindings, i + 3));
 
         if (offset < 0 || size < 0) {
-            PyErr_SetString(PyExc_ValueError, "buffer offset and size must be non-negative");
+            PyErr_SetString(PyExc_ValueError, "[HyperGL] buffer offset and size must be non-negative");
             goto error_cleanup;
         }
 
@@ -1353,13 +1360,13 @@ static DescriptorSetSamplers build_descriptor_set_samplers(Context *self, PyObje
     zeromem(&res, sizeof(res));
 
     if (!PyTuple_Check(bindings)) {
-        PyErr_SetString(PyExc_TypeError, "bindings must be a tuple");
+        PyErr_SetString(PyExc_TypeError, "[HyperGL] bindings must be a tuple");
         return res;
     }
 
     int length = (int)PyTuple_Size(bindings);
     if ((length % 3) != 0) {
-        PyErr_SetString(PyExc_TypeError, "bindings must be triples of (binding, image, params)");
+        PyErr_SetString(PyExc_TypeError, "[HyperGL] bindings must be triples of (binding, image, params)");
         return res;
     }
 
@@ -1371,13 +1378,13 @@ static DescriptorSetSamplers build_descriptor_set_samplers(Context *self, PyObje
         }
 
         if (binding < 0 || binding >= MAX_SAMPLER_BINDINGS) {
-            PyErr_Format(PyExc_IndexError, "Binding index %d exceeds MAX_SAMPLER_BINDINGS (%d)", binding, MAX_SAMPLER_BINDINGS);
+            PyErr_Format(PyExc_IndexError, "[HyperGL] Binding index %d exceeds MAX_SAMPLER_BINDINGS (%d)", binding, MAX_SAMPLER_BINDINGS);
             goto error_cleanup; 
         }
 
         PyObject *img_obj = PyTuple_GetItem(bindings, i + 1);
         if (!PyObject_TypeCheck(img_obj, self->module_state->Image_type)) {
-            PyErr_SetString(PyExc_TypeError, "binding index 1 must be an Image object");
+            PyErr_SetString(PyExc_TypeError, "[HyperGL] binding index 1 must be an Image object");
             goto error_cleanup;
         }
         Image *image = (Image *)img_obj;
@@ -1392,7 +1399,7 @@ static DescriptorSetSamplers build_descriptor_set_samplers(Context *self, PyObje
         if (res.binding[binding].sampler) {
             Py_DECREF(sampler);
             PyErr_Format(PyExc_ValueError,
-                "duplicate sampler binding %d", binding);
+                "[HyperGL] duplicate sampler binding %d", binding);
             goto error_cleanup;
         }
 
@@ -1444,7 +1451,7 @@ static DescriptorSet *build_descriptor_set(Context *self, PyObject *bindings)
     }
 
     if (!PyTuple_Check(bindings) || PyTuple_Size(bindings) < 2) {
-        PyErr_SetString(PyExc_TypeError, "bindings must be a tuple of at least 2 elements");
+        PyErr_SetString(PyExc_TypeError, "[HyperGL] bindings must be a tuple of at least 2 elements");
         return NULL;
     }
 
@@ -1503,7 +1510,7 @@ static GlobalSettings *build_global_settings(const Context *self, PyObject *sett
     }
 
     if (!PyTuple_Check(settings)) {
-        PyErr_SetString(PyExc_TypeError, "settings must be a tuple");
+        PyErr_SetString(PyExc_TypeError, "[HyperGL] settings must be a tuple");
         return NULL;
     }
 
@@ -1593,13 +1600,13 @@ static GLObject *compile_shader(Context *self, PyObject *pair)
     }
 
     if (!PyTuple_Check(pair) || PyTuple_Size(pair) < 2) {
-        PyErr_SetString(PyExc_TypeError, "shader pair must be (source, type)");
+        PyErr_SetString(PyExc_TypeError, "[HyperGL] shader pair must be (source, type)");
         return NULL;
     }
 
     PyObject *code = PyTuple_GetItem(pair, 0);
     if (!PyBytes_Check(code)) {
-        PyErr_SetString(PyExc_TypeError, "shader source must be bytes");
+        PyErr_SetString(PyExc_TypeError, "[HyperGL] shader source must be bytes");
         return NULL;
     }
 
@@ -1615,7 +1622,7 @@ static GLObject *compile_shader(Context *self, PyObject *pair)
     shader = glCreateShader(type);
     if (!shader) {
         PyMutex_Unlock(&self->state_lock);
-        PyErr_SetString(PyExc_RuntimeError, "glCreateShader failed");
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] glCreateShader failed");
         return NULL;
     }
 
@@ -1787,7 +1794,7 @@ static GLObject *compile_compute_program(Context *self, PyObject *includes, PyOb
     } else if (PyBytes_Check(source)) {
         src = PyBytes_AsString(source);
     } else {
-        PyErr_SetString(PyExc_TypeError, "Compute source must be str or bytes");
+        PyErr_SetString(PyExc_TypeError, "[HyperGL] Compute source must be str or bytes");
         goto cleanup;
     }
 
@@ -1797,7 +1804,7 @@ static GLObject *compile_compute_program(Context *self, PyObject *includes, PyOb
     shader = glCreateShader(GL_COMPUTE_SHADER);
     if (shader == 0) {
         PyMutex_Unlock(&self->state_lock);
-        PyErr_SetString(PyExc_RuntimeError, "glCreateShader failed.");
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] glCreateShader failed.");
         goto cleanup;
     }
 
@@ -1817,7 +1824,7 @@ static GLObject *compile_compute_program(Context *self, PyObject *includes, PyOb
         PyMutex_Unlock(&self->state_lock);
 
         if (temp_log) {
-            PyErr_Format(PyExc_ValueError, "Compute Compile Error:\n%s", temp_log);
+            PyErr_Format(PyExc_ValueError, "[HyperGL] Compute Compile Error:\n%s", temp_log);
             PyMem_Free(temp_log);
         }
         glDeleteShader(shader);
@@ -1828,7 +1835,7 @@ static GLObject *compile_compute_program(Context *self, PyObject *includes, PyOb
     program = glCreateProgram();
     if (!program) {
         PyMutex_Unlock(&self->state_lock);
-        PyErr_SetString(PyExc_RuntimeError, "glCreateProgram failed.");
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] glCreateProgram failed.");
         glDeleteShader(shader);
         shader = 0;
         goto cleanup;
@@ -1852,7 +1859,7 @@ static GLObject *compile_compute_program(Context *self, PyObject *includes, PyOb
         PyMutex_Unlock(&self->state_lock);
 
         if (temp_log) {
-            PyErr_Format(PyExc_ValueError, "Compute Link Error:\n%s", temp_log);
+            PyErr_Format(PyExc_ValueError, "[HyperGL] Compute Link Error:\n%s", temp_log);
             PyMem_Free(temp_log);
         }
         glDeleteProgram(program);
@@ -1939,7 +1946,7 @@ static GLObject *compile_program(Context *self, PyObject *includes, PyObject *ve
     program = glCreateProgram();
     if (!program) {
         PyMutex_Unlock(&self->state_lock);
-        PyErr_SetString(PyExc_RuntimeError, "glCreateProgram failed.");
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] glCreateProgram failed.");
         goto cleanup;
     }
 
@@ -2157,7 +2164,7 @@ static PyObject *blit_image_face(const ImageFace *src, PyObject *target_arg, PyO
         Image *image = (Image *)target_arg;
         if (image->array || image->cubemap)
         {
-            PyErr_Format(PyExc_TypeError, "cannot blit to whole cubemap or array images");
+            PyErr_Format(PyExc_TypeError, "[HyperGL] cannot blit to whole cubemap or array images");
             return NULL;
         }
         target_arg = PyTuple_GetItem(image->layers, 0);
@@ -2165,7 +2172,7 @@ static PyObject *blit_image_face(const ImageFace *src, PyObject *target_arg, PyO
 
     if (target_arg != Py_None && Py_TYPE(target_arg) != src->image->ctx->module_state->ImageFace_type)
     {
-        PyErr_Format(PyExc_TypeError, "target must be an Image or ImageFace or None");
+        PyErr_Format(PyExc_TypeError, "[HyperGL] target must be an Image or ImageFace or None");
         return NULL;
     }
 
@@ -2173,47 +2180,47 @@ static PyObject *blit_image_face(const ImageFace *src, PyObject *target_arg, PyO
 
     if (target && src->image->fmt.color != target->image->fmt.color)
     {
-        PyErr_Format(PyExc_TypeError, "cannot blit between color and depth images");
+        PyErr_Format(PyExc_TypeError, "[HyperGL] cannot blit between color and depth images");
         return NULL;
     }
 
     if (target && target->image->samples > 1)
     {
-        PyErr_Format(PyExc_TypeError, "cannot blit to multisampled images");
+        PyErr_Format(PyExc_TypeError, "[HyperGL] cannot blit to multisampled images");
         return NULL;
     }
 
     Viewport crop;
     if (!to_viewport(&crop, crop_arg, 0, 0, src->width, src->height))
     {
-        PyErr_Format(PyExc_TypeError, "the crop must be a tuple of 4 ints");
+        PyErr_Format(PyExc_TypeError, "[HyperGL] the crop must be a tuple of 4 ints");
         return NULL;
     }
 
     IntPair offset;
     if (!to_int_pair(&offset, offset_arg, 0, 0))
     {
-        PyErr_Format(PyExc_TypeError, "the offset must be a tuple of 2 ints");
+        PyErr_Format(PyExc_TypeError, "[HyperGL] the offset must be a tuple of 2 ints");
         return NULL;
     }
 
     IntPair size;
     if (!to_int_pair(&size, size_arg, crop.width, crop.height))
     {
-        PyErr_Format(PyExc_TypeError, "the size must be a tuple of 2 ints");
+        PyErr_Format(PyExc_TypeError, "[HyperGL] the size must be a tuple of 2 ints");
         return NULL;
     }
 
     int scaled = (crop.width != size.x && crop.width != -size.x) || (crop.height != size.y && crop.height != -size.y);
     if (src->image->samples > 1 && scaled)
     {
-        PyErr_Format(PyExc_TypeError, "multisampled images cannot be scaled");
+        PyErr_Format(PyExc_TypeError, "[HyperGL] multisampled images cannot be scaled");
         return NULL;
     }
 
     if (!target && src->image->samples > 1 && src->image->ctx->is_gles)
     {
-        PyErr_Format(PyExc_TypeError, "multisampled images needs to be downsampled before blitting to the screen");
+        PyErr_Format(PyExc_TypeError, "[HyperGL] multisampled images needs to be downsampled before blitting to the screen");
         return NULL;
     }
 
@@ -2224,7 +2231,7 @@ static PyObject *blit_image_face(const ImageFace *src, PyObject *target_arg, PyO
 
     if (src->ctx->is_lost) {
         PyMutex_Unlock(&src->ctx->state_lock);
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
         return NULL;
     }
     int buffer = src->image->fmt.color ? GL_COLOR_BUFFER_BIT : (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
@@ -2243,31 +2250,31 @@ static int parse_size_and_offset(const ImageFace *self, PyObject *size_arg, PyOb
 {
     if (size_arg == Py_None && offset_arg != Py_None)
     {
-        PyErr_Format(PyExc_ValueError, "the size is required when the offset is not None");
+        PyErr_Format(PyExc_ValueError, "[HyperGL] the size is required when the offset is not None");
         return 0;
     }
 
     if (!to_int_pair(size, size_arg, self->width, self->height))
     {
-        PyErr_Format(PyExc_TypeError, "the size must be a tuple of 2 ints");
+        PyErr_Format(PyExc_TypeError, "[HyperGL] the size must be a tuple of 2 ints");
         return 0;
     }
 
     if (!to_int_pair(offset, offset_arg, 0, 0))
     {
-        PyErr_Format(PyExc_TypeError, "the offset must be a tuple of 2 ints");
+        PyErr_Format(PyExc_TypeError, "[HyperGL] the offset must be a tuple of 2 ints");
         return 0;
     }
 
     if (size->x <= 0 || size->y <= 0 || size->x > self->width || size->y > self->height)
     {
-        PyErr_Format(PyExc_ValueError, "invalid size");
+        PyErr_Format(PyExc_ValueError, "[HyperGL] invalid size");
         return 0;
     }
 
     if (offset->x < 0 || offset->y < 0 || size->x + offset->x > self->width || size->y + offset->y > self->height)
     {
-        PyErr_Format(PyExc_ValueError, "invalid offset");
+        PyErr_Format(PyExc_ValueError, "[HyperGL] invalid offset");
         return 0;
     }
 
@@ -2277,11 +2284,11 @@ static int parse_size_and_offset(const ImageFace *self, PyObject *size_arg, PyOb
 static PyObject *read_image_face(ImageFace *src, IntPair size, IntPair offset, PyObject *into)
 {
     if (!src->ctx || src->ctx->is_lost) {
-        PyErr_SetString(PyExc_RuntimeError, "context lost");
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] context lost");
         return NULL;
     }
     if (!src->framebuffer) {
-        PyErr_SetString(PyExc_RuntimeError, "invalid framebuffer");
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] invalid framebuffer");
         return NULL;
     }
     if (src->image->samples > 1)
@@ -2331,7 +2338,7 @@ static PyObject *read_image_face(ImageFace *src, IntPair size, IntPair offset, P
         if (write_size > buffer_view->size)
         {
             Py_DECREF(buffer_view);
-            PyErr_Format(PyExc_ValueError, "invalid size");
+            PyErr_Format(PyExc_ValueError, "[HyperGL] invalid size");
             return NULL;
         }
 
@@ -2350,7 +2357,7 @@ static PyObject *read_image_face(ImageFace *src, IntPair size, IntPair offset, P
 
     if (write_size > (int)view.len) {
         PyBuffer_Release(&view);
-        PyErr_Format(PyExc_ValueError, "invalid write size");
+        PyErr_Format(PyExc_ValueError, "[HyperGL] invalid write size");
         return NULL;
     }
 
@@ -2406,7 +2413,7 @@ static int init_gl_limits(ModuleState *state)
     GLenum err = glGetError();
     if (err != GL_NO_ERROR) {
         PyErr_Format(PyExc_RuntimeError,
-            "OpenGL error while querying limits (0x%x)", err);
+            "[HyperGL] OpenGL error while querying limits (0x%x)", err);
         return -1;
     }
 #endif
@@ -2463,65 +2470,58 @@ static PyObject *meth_init(PyObject *self, PyObject *args, PyObject *kwargs)
 {
     static char *keywords[] = {"loader", "headless", NULL};
     PyObject *loader = Py_None;
+    PyObject *new_loader = NULL;
     int headless = 0;
 
     ModuleState *module_state = PyModule_GetState(self);
     if (!module_state) return NULL; 
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|Op", keywords, &loader, &headless)) return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|Op", keywords, &loader, &headless)) 
+        return NULL;
 
     PyMutex_Lock(&module_state->setup_lock);
-    
-    // Resolve Loader
-    PyObject *new_loader = NULL;
-    
-    if (loader == Py_None) {
-        // If headless is requested on Windows, we MUST use the Python helper 
-        // because the internal C loader (module_obj) cannot create contexts.
+
+    // 1. Resolve Loader
+    if (loader != Py_None) {
+        new_loader = Py_NewRef(loader);
+    } else {
         int use_python_loader = 1;
-        
-        #ifdef _WIN64
-        if (!headless) {
-            use_python_loader = 0;
-        }
-        #endif
+#ifdef _WIN64
+        if (!headless) use_python_loader = 0;
+#endif
 
         if (use_python_loader) {
-            // Call hypergl._hypergl.loader(headless=headless)
             new_loader = PyObject_CallMethod(module_state->helper, "loader", "(i)", headless);
         } else {
-            #ifdef _WIN64
-            new_loader = Py_NewRef(self); // Use self as loader
-            #else
-            new_loader = NULL; // Should not happen due to logic above
-            #endif
+            new_loader = Py_NewRef(self);
         }
-    } else {
-        new_loader = Py_NewRef(loader);
     }
 
-    if (!new_loader) {
-        PyMutex_Unlock(&module_state->setup_lock);
-        return NULL;
+    // 2. Check if resolution failed
+    if (!new_loader){ 
+        // ensure an error exists
+        if (!PyErr_Occurred())
+            PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Failed to resolve loader");
+        goto finally;
     }
 
-    // Pass the resolved loader to the internal init logic
-    if (init_internal(module_state, self, new_loader) < 0) {
-         Py_DECREF(new_loader);
-         PyMutex_Unlock(&module_state->setup_lock);
-         if (!PyErr_Occurred()) PyErr_SetString(PyExc_RuntimeError, "Initialization failed");
-         return NULL;
+    // 3. Internal Init
+    // init_internal() does NOT steal a reference to new_loader
+    if (init_internal(module_state, self, new_loader) < 0) { 
+        if (!PyErr_Occurred()) {
+            PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Internal init failed");
+        }
+        goto finally;
     }
-    
-    // init_internal consumed the reference to new_loader via module_state->default_loader
-    // but we decref here because init_internal did Py_NewRef(loader) logic internally?
-    // Wait, let's look at init_internal again.
-    // init_internal takes (state, module, loader).
-    // It calls Py_NewRef(loader). 
-    // So we own 'new_loader' here, we must DECREF it after init_internal is done with it.
-    Py_DECREF(new_loader);
 
+finally:
+    // Handle cleanup in ONE place
+    Py_XDECREF(new_loader);
     PyMutex_Unlock(&module_state->setup_lock);
+
+    // If an error was set anywhere above, returning NULL tells Python to raise it
+    if (PyErr_Occurred()) return NULL;
+
     Py_RETURN_NONE;
 }
 
@@ -2874,10 +2874,7 @@ static int Context_clear(Context *self) {
 static PyObject *Context_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) // HAS GC_TRACK
 {
     ModuleState *module_state = PyType_GetModuleState(type);
-    if (!module_state) {
-        PyErr_SetString(PyExc_RuntimeError, "Could not retrieve module state from Context type");
-        return NULL;
-    }
+    INTERNAL_CHECK(module_state, "Could not retrieve module state from Context type");
 
     PyMutex_Lock(&module_state->setup_lock); 
 
@@ -2903,14 +2900,14 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args, PyObject *kwarg
              }
         } else {
              PyMutex_Unlock(&module_state->setup_lock);
-             PyErr_SetString(PyExc_RuntimeError, "Could not locate module instance");
+             PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Could not locate module instance");
              return NULL;
         }
     }
 
     // Allocate default framebuffer wrapper
     if (!module_state->GLObject_type) {
-        PyErr_SetString(PyExc_RuntimeError, "GLObject_type is NULL");
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] GLObject_type is NULL");
         PyMutex_Unlock(&module_state->setup_lock);
         return NULL;
     }
@@ -2990,7 +2987,7 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args, PyObject *kwarg
 
     // Validate GL functions
     if (!glGetIntegerv) {
-        PyErr_SetString(PyExc_RuntimeError, "OpenGL functions not loaded. Initialization failed.");
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] OpenGL functions not loaded. Initialization failed.");
         goto fail;
     }
 
@@ -3091,25 +3088,25 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args, PyObject *kwar
 
     if (self->is_lost)
     {
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
         return NULL;
     }
 
     if (size_arg != Py_None && !PyLong_CheckExact(size_arg))
     {
-        PyErr_Format(PyExc_TypeError, "the size must be an int");
+        PyErr_Format(PyExc_TypeError, "[HyperGL] the size must be an int");
         return NULL;
     }
 
     if (data == Py_None && size_arg == Py_None)
     {
-        PyErr_Format(PyExc_ValueError, "data or size is required");
+        PyErr_Format(PyExc_ValueError, "[HyperGL] data or size is required");
         return NULL;
     }
 
     if (data != Py_None && size_arg != Py_None)
     {
-        PyErr_Format(PyExc_ValueError, "data and size are exclusive");
+        PyErr_Format(PyExc_ValueError, "[HyperGL] data and size are exclusive");
         return NULL;
     }
 
@@ -3118,7 +3115,7 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args, PyObject *kwar
     {
         size = to_int(size_arg);
         if (size <= 0) {
-            PyErr_Format(PyExc_ValueError, "invalid size");
+            PyErr_Format(PyExc_ValueError, "[HyperGL] invalid size");
             return NULL;
         }
     }
@@ -3145,7 +3142,7 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args, PyObject *kwar
         if (size == 0) {
             PyBuffer_Release(&view);
             Py_DECREF(data);
-            PyErr_Format(PyExc_ValueError, "invalid size");
+            PyErr_Format(PyExc_ValueError, "[HyperGL] invalid size");
             return NULL;
         }
         
@@ -3165,7 +3162,7 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args, PyObject *kwar
             PyBuffer_Release(&view);
             Py_DECREF(data);
         }
-        PyErr_Format(PyExc_ValueError, "invalid access");
+        PyErr_Format(PyExc_ValueError, "[HyperGL] invalid access");
         return NULL;
     }
 
@@ -3246,15 +3243,15 @@ static PyObject * Buffer_meth_bind(const Buffer *self, PyObject *args)
 
     VALIDATE(unit >= 0 && unit < self->ctx->module_state->limits.max_shader_storage_buffer_bindings,
              PyExc_ValueError,
-             "Binding unit %d out of range", unit);
+             "[HyperGL] Binding unit %d out of range", unit);
 
     VALIDATE(self->buffer != 0,
              PyExc_RuntimeError,
-             "Buffer has been released");
+             "[HyperGL] Buffer has been released");
 
     VALIDATE(self->target == GL_SHADER_STORAGE_BUFFER,
              PyExc_TypeError,
-             "Only Storage Buffers can be bound");
+             "[HyperGL] Only Storage Buffers can be bound");
 
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, unit, self->buffer); 
     Py_RETURN_NONE;
@@ -3262,7 +3259,7 @@ static PyObject * Buffer_meth_bind(const Buffer *self, PyObject *args)
 
 static int Buffer_getbuffer(Buffer *self, Py_buffer *view, int flags) {
     if (!self->mapped_ptr) {
-        PyErr_SetString(PyExc_BufferError, "Buffer not mapped");
+        PyErr_SetString(PyExc_BufferError, "[HyperGL] Buffer not mapped");
         return -1;
     }
 
@@ -3289,15 +3286,15 @@ static PyObject * Buffer_meth_map(Buffer *self, PyObject * args) {
     }
 
     if (self->buffer == 0) {
-        PyErr_SetString(PyExc_RuntimeError, "Cannot map buffer ID 0");
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Cannot map buffer ID 0");
         return NULL;
     }
 
     VALIDATE(self->target == GL_SHADER_STORAGE_BUFFER, PyExc_TypeError, 
-             "Mapping only supported for SSBOs (ID: %d)", self->buffer);
+             "[HyperGL] Mapping only supported for SSBOs (ID: %d)", self->buffer);
 
     VALIDATE(self->size % 16 == 0, PyExc_ValueError, 
-             "SSBO size (%d) must be 16-byte aligned", self->size);
+             "[HyperGL] SSBO size (%d) must be 16-byte aligned", self->size);
 
     if (!self->mapped_ptr) {
         PyMutex_Lock(&self->ctx->state_lock);
@@ -3310,7 +3307,7 @@ static PyObject * Buffer_meth_map(Buffer *self, PyObject * args) {
             GLenum err = glGetError();
             printf("[HyperGL] glMapBufferRange FAILED. GL_ERROR: 0x%X\n", err);
             PyMutex_Unlock(&self->ctx->state_lock);
-            PyErr_Format(PyExc_RuntimeError, "glMapBufferRange failed (GL_ERR: 0x%X). See console.", err);
+            PyErr_Format(PyExc_RuntimeError, "[HyperGL] glMapBufferRange failed (GL_ERR: 0x%X). See console.", err);
             return NULL;
         }
         
@@ -3353,7 +3350,7 @@ static PyObject * Buffer_meth_unmap(Buffer *self, PyObject *args) {
     // unmapping is a recipe for a Segfault in the physics thread.
     if (self->memoryview && Py_REFCNT(self->memoryview) > 1) {
         PyMutex_Unlock(&self->ctx->state_lock);
-        PyErr_SetString(PyExc_BufferError, "Cannot unmap; physics thread or user still holds the memoryview");
+        PyErr_SetString(PyExc_BufferError, "[HyperGL] Cannot unmap; physics thread or user still holds the memoryview");
         return NULL;
     }
 
@@ -3379,7 +3376,7 @@ static PyObject *Buffer_meth_write_texture_handle(const Buffer *self, PyObject *
         return NULL;
 
     if (!PyObject_TypeCheck(image_obj, self->ctx->module_state->Image_type)) {
-        PyErr_SetString(PyExc_TypeError, "Argument must be an Image object");
+        PyErr_SetString(PyExc_TypeError, "[HyperGL] Argument must be an Image object");
         return NULL;
     }
 
@@ -3388,20 +3385,20 @@ static PyObject *Buffer_meth_write_texture_handle(const Buffer *self, PyObject *
     // Auto-fetch handle if missing
     if (img->bindless_handle == 0) {
         if (!glGetTextureHandleARB) {
-            PyErr_SetString(PyExc_RuntimeError, "Bindless not supported");
+            PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Bindless not supported");
             return NULL;
         }
         PyMutex_Lock(&self->ctx->state_lock);
         img->bindless_handle = glGetTextureHandleARB(img->image);
         PyMutex_Unlock(&self->ctx->state_lock);
         if (img->bindless_handle == 0) {
-            PyErr_SetString(PyExc_RuntimeError, "Failed to get texture handle");
+            PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Failed to get texture handle");
             return NULL;
         }
     }
 
     if (offset < 0 || offset + sizeof(GLuint64) > (size_t)self->size) {
-        PyErr_SetString(PyExc_ValueError, "Offset out of bounds");
+        PyErr_SetString(PyExc_ValueError, "[HyperGL] Offset out of bounds");
         return NULL;
     }
 
@@ -3432,8 +3429,8 @@ static PyObject *Buffer_meth_write(const Buffer *self, PyObject *args, PyObject 
         return NULL;
     }
 
-    VALIDATE(!self->ctx->is_lost, PyExc_RuntimeError, "the context is lost");
-    VALIDATE(offset >= 0 && offset <= self->size, PyExc_ValueError, "invalid offset");
+    VALIDATE(!self->ctx->is_lost, PyExc_RuntimeError, "[HyperGL] the context is lost");
+    VALIDATE(offset >= 0 && offset <= self->size, PyExc_ValueError, "[HyperGL] invalid offset");
 
     BufferView *buffer_view = NULL;
     if (Py_TYPE(data) == self->ctx->module_state->Buffer_type) {
@@ -3445,7 +3442,7 @@ static PyObject *Buffer_meth_write(const Buffer *self, PyObject *args, PyObject 
     if (buffer_view) {
         if (buffer_view->size + offset > self->size) {
             Py_DECREF(buffer_view);
-            PyErr_Format(PyExc_ValueError, "invalid size");
+            PyErr_Format(PyExc_ValueError, "[HyperGL] invalid size");
             return NULL;
         }
 
@@ -3476,7 +3473,7 @@ static PyObject *Buffer_meth_write(const Buffer *self, PyObject *args, PyObject 
     if (data_size + offset > self->size) {
         PyBuffer_Release(&view);
         Py_DECREF(mem);
-        PyErr_Format(PyExc_ValueError, "invalid size");
+        PyErr_Format(PyExc_ValueError, "[HyperGL] invalid size");
         return NULL;
     }
 
@@ -3520,19 +3517,19 @@ static PyObject *Buffer_meth_read(Buffer *self, PyObject *args, PyObject *kwargs
 
     if (self->ctx->is_lost)
     {
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
         return NULL;
     }
 
     if (offset < 0 || offset > self->size)
     {
-        PyErr_Format(PyExc_ValueError, "invalid offset");
+        PyErr_Format(PyExc_ValueError, "[HyperGL] invalid offset");
         return NULL;
     }
 
     if (size_arg != Py_None && !PyLong_CheckExact(size_arg))
     {
-        PyErr_Format(PyExc_TypeError, "the size must be an int");
+        PyErr_Format(PyExc_TypeError, "[HyperGL] the size must be an int");
         return NULL;
     }
 
@@ -3542,14 +3539,14 @@ static PyObject *Buffer_meth_read(Buffer *self, PyObject *args, PyObject *kwargs
         size = to_int(size_arg);
         if (size < 0)
         {
-            PyErr_Format(PyExc_ValueError, "invalid size");
+            PyErr_Format(PyExc_ValueError, "[HyperGL] invalid size");
             return NULL;
         }
     }
 
     if (size < 0 || size + offset > self->size)
     {
-        PyErr_Format(PyExc_ValueError, "invalid size");
+        PyErr_Format(PyExc_ValueError, "[HyperGL] invalid size");
         return NULL;
     }
 
@@ -3583,7 +3580,7 @@ static PyObject *Buffer_meth_read(Buffer *self, PyObject *args, PyObject *kwargs
         BufferView *buffer_view = (BufferView *)into;
         if (size > buffer_view->size)
         {
-            PyErr_Format(PyExc_ValueError, "invalid size");
+            PyErr_Format(PyExc_ValueError, "[HyperGL] invalid size");
             return NULL;
         }
         PyObject *chunk = PyObject_CallMethod((PyObject *)self, "view", "(ii)", size, offset);
@@ -3598,7 +3595,7 @@ static PyObject *Buffer_meth_read(Buffer *self, PyObject *args, PyObject *kwargs
 
     if (size > (int)view.len)
     {
-        PyErr_Format(PyExc_ValueError, "invalid size");
+        PyErr_Format(PyExc_ValueError, "[HyperGL] invalid size");
         return NULL;
     }
 
@@ -3631,19 +3628,19 @@ static BufferView *Buffer_meth_view(Buffer *self, PyObject *args, PyObject *kwar
 
     if (self->ctx->is_lost)
     {
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
         return NULL;
     }
 
     if (offset < 0 || offset > self->size)
     {
-        PyErr_Format(PyExc_ValueError, "invalid offset");
+        PyErr_Format(PyExc_ValueError, "[HyperGL] invalid offset");
         return NULL;
     }
 
     if (size < 0 || offset + size > self->size)
     {
-        PyErr_Format(PyExc_ValueError, "invalid size");
+        PyErr_Format(PyExc_ValueError, "[HyperGL] invalid size");
         return NULL;
     }
 
@@ -3661,15 +3658,15 @@ static BufferView *Buffer_meth_view(Buffer *self, PyObject *args, PyObject *kwar
 
 static int Image_write_internal(const Image *self, PyObject *data) {
     if (self->ctx->is_lost) {
-        PyErr_SetString(PyExc_RuntimeError, "the context is lost");
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] the context is lost");
         return -1;
     }
     if (self->renderbuffer) {
-        PyErr_SetString(PyExc_RuntimeError, "cannot write to renderbuffer");
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] cannot write to renderbuffer");
         return -1;
     }
     if (self->image == 0) {
-        PyErr_SetString(PyExc_RuntimeError, "invalid image object");
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] invalid image object");
         return -1;
     }
 
@@ -3685,7 +3682,7 @@ static int Image_write_internal(const Image *self, PyObject *data) {
 
     
     if (view.len < expected_size) {
-        PyErr_Format(PyExc_ValueError, "data buffer too small (expected %zd bytes, got %zd)", expected_size, view.len);
+        PyErr_Format(PyExc_ValueError, "[HyperGL] data buffer too small (expected %zd bytes, got %zd)", expected_size, view.len);
         PyBuffer_Release(&view);
         return -1;
     }
@@ -3776,21 +3773,21 @@ static Image *Context_meth_image(Context *self, PyObject *args, PyObject *kwargs
     // --- Validation Logic ---
     int max_levels = count_mipmaps(width, height);
     if (levels <= 0) levels = max_levels;
-    if (self->is_lost) { PyErr_SetString(PyExc_RuntimeError, "context lost"); return NULL; }
+    if (self->is_lost) { PyErr_SetString(PyExc_RuntimeError, "[HyperGL] context lost"); return NULL; }
 
-    VALIDATE(texture == Py_True || texture == Py_False || texture == Py_None, PyExc_TypeError, "invalid texture parameter");
-    VALIDATE(!(samples > 1 && texture == Py_True), PyExc_TypeError, "for multisampled images texture must be False");
-    VALIDATE(samples >= 1 && !(samples & (samples - 1)) && samples <= 16, PyExc_ValueError, "samples must be 1, 2, 4, 8 or 16");
-    VALIDATE(array >= 0, PyExc_ValueError, "array must not be negative");
-    VALIDATE(levels <= max_levels, PyExc_ValueError, "too many levels");
-    VALIDATE(!(cubemap && array), PyExc_TypeError, "cubemap arrays are not supported");
-    VALIDATE(!(samples > 1 && (array || cubemap)), PyExc_TypeError, "multisampled array or cubemap images are not supported");
-    VALIDATE(!(texture == Py_False && (array || cubemap)), PyExc_TypeError, "for array or cubemap images texture must be True");
-    VALIDATE(!(data != Py_None && samples > 1), PyExc_ValueError, "cannot write to multisampled images");
-    VALIDATE(!(data != Py_None && texture == Py_False), PyExc_ValueError, "cannot write to renderbuffers");
-    VALIDATE(width > 0 && height > 0, PyExc_ValueError, "invalid image size");
+    VALIDATE(texture == Py_True || texture == Py_False || texture == Py_None, PyExc_TypeError, "[HyperGL] invalid texture parameter");
+    VALIDATE(!(samples > 1 && texture == Py_True), PyExc_TypeError, "[HyperGL] for multisampled images texture must be False");
+    VALIDATE(samples >= 1 && !(samples & (samples - 1)) && samples <= 16, PyExc_ValueError, "[HyperGL] samples must be 1, 2, 4, 8 or 16");
+    VALIDATE(array >= 0, PyExc_ValueError, "[HyperGL] array must not be negative");
+    VALIDATE(levels <= max_levels, PyExc_ValueError, "[HyperGL] too many levels");
+    VALIDATE(!(cubemap && array), PyExc_TypeError, "[HyperGL] cubemap arrays are not supported");
+    VALIDATE(!(samples > 1 && (array || cubemap)), PyExc_TypeError, "[HyperGL] multisampled array or cubemap images are not supported");
+    VALIDATE(!(texture == Py_False && (array || cubemap)), PyExc_TypeError, "[HyperGL] for array or cubemap images texture must be True");
+    VALIDATE(!(data != Py_None && samples > 1), PyExc_ValueError, "[HyperGL] cannot write to multisampled images");
+    VALIDATE(!(data != Py_None && texture == Py_False), PyExc_ValueError, "[HyperGL] cannot write to renderbuffers");
+    VALIDATE(width > 0 && height > 0, PyExc_ValueError, "[HyperGL] invalid image size");
     if (external) {
-        VALIDATE(external > 0, PyExc_ValueError, "external must be a valid GL object");
+        VALIDATE(external > 0, PyExc_ValueError, "[HyperGL] external must be a valid GL object");
     }
 
     int renderbuffer = samples > 1 || texture == Py_False;
@@ -3799,7 +3796,7 @@ static Image *Context_meth_image(Context *self, PyObject *args, PyObject *kwargs
 
     ImageFormat fmt;
     if (!get_image_format(state, state->helper, format, &fmt)) {
-        PyErr_SetString(PyExc_ValueError, "invalid image format");
+        PyErr_SetString(PyExc_ValueError, "[HyperGL] invalid image format");
         return NULL;
     }
 
@@ -3911,14 +3908,14 @@ static Image *Context_meth_image(Context *self, PyObject *args, PyObject *kwargs
 static PyObject *Image_meth_get_handle(Image *self, PyObject *args)
 {
     if (self->ctx->is_lost) {
-        PyErr_Format(PyExc_RuntimeError, "context lost");
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] context lost");
         return NULL;
     }
     
     // Lazy creation of the handle
     if (self->bindless_handle == 0) {
         if (!glGetTextureHandleARB) {
-            PyErr_SetString(PyExc_RuntimeError, "Bindless textures not supported (GL_ARB_bindless_texture missing)");
+            PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Bindless textures not supported (GL_ARB_bindless_texture missing)");
             return NULL;
         }
 
@@ -3929,7 +3926,7 @@ static PyObject *Image_meth_get_handle(Image *self, PyObject *args)
         PyMutex_Unlock(&self->ctx->state_lock);
 
         if (self->bindless_handle == 0) {
-             PyErr_SetString(PyExc_RuntimeError, "Failed to create texture handle");
+             PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Failed to create texture handle");
              return NULL;
         }
     }
@@ -3940,7 +3937,7 @@ static PyObject *Image_meth_get_handle(Image *self, PyObject *args)
 static PyObject *Image_meth_make_resident(Image *self, PyObject *args)
 {
     if (self->ctx->is_lost) {
-        PyErr_SetString(PyExc_RuntimeError, "context lost");
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] context lost");
         return NULL;
     }
 
@@ -3948,7 +3945,7 @@ static PyObject *Image_meth_make_resident(Image *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "|p", &resident)) return NULL;
 
     if (self->bindless_handle == 0) {
-        PyErr_SetString(PyExc_RuntimeError, "Texture has no handle. Call get_handle() first.");
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Texture has no handle. Call get_handle() first.");
         return NULL;
     }
 
@@ -3958,13 +3955,13 @@ static PyObject *Image_meth_make_resident(Image *self, PyObject *args)
         if (glGetError() == GL_NO_ERROR)
             self->is_resident = 1;
         else
-            PyErr_SetString(PyExc_RuntimeError, "Failed to make texture handle resident");
+            PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Failed to make texture handle resident");
     } else if (!resident && self->is_resident) {
         glMakeTextureHandleNonResidentARB(self->bindless_handle);
         if (glGetError() == GL_NO_ERROR)
             self->is_resident = 0;
         else
-            PyErr_SetString(PyExc_RuntimeError, "Failed to make texture handle non-resident");
+            PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Failed to make texture handle non-resident");
     }
     PyMutex_Unlock(&self->ctx->state_lock);
     
@@ -3973,7 +3970,7 @@ static PyObject *Image_meth_make_resident(Image *self, PyObject *args)
 
 static PyObject *Image_meth_clear(const Image *self, PyObject *args) {
     if (self->ctx->is_lost) {
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
         return NULL;
     }
 
@@ -4030,7 +4027,7 @@ static PyObject *Image_meth_write(const Image *self, PyObject *args, PyObject *k
     }
 
     if (self->ctx->is_lost) {
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
         return NULL;
     }
 
@@ -4040,17 +4037,17 @@ static PyObject *Image_meth_write(const Image *self, PyObject *args, PyObject *k
 
     IntPair size, offset;
     if (!to_int_pair(&size, size_arg, level_w, level_h) || !to_int_pair(&offset, offset_arg, 0, 0)) {
-        PyErr_Format(PyExc_TypeError, "size and offset must be tuples of 2 ints");
+        PyErr_Format(PyExc_TypeError, "[HyperGL] size and offset must be tuples of 2 ints");
         return NULL;
     }
 
     if (size.x <= 0 || size.y <= 0 || size.x + offset.x > level_w || size.y + offset.y > level_h) {
-        PyErr_Format(PyExc_ValueError, "invalid size or offset for level %d", level);
+        PyErr_Format(PyExc_ValueError, "[HyperGL] invalid size or offset for level %d", level);
         return NULL;
     }
 
     if (layer < 0 || layer >= self->layer_count || (layer_arg != Py_None && !self->cubemap && !self->array)) {
-        PyErr_Format(PyExc_ValueError, "invalid layer selection");
+        PyErr_Format(PyExc_ValueError, "[HyperGL] invalid layer selection");
         return NULL;
     }
 
@@ -4074,7 +4071,7 @@ static PyObject *Image_meth_write(const Image *self, PyObject *args, PyObject *k
     }
 
     if ((buffer_view ? buffer_view->size : (int)view.len) != expected_size) {
-        PyErr_Format(PyExc_ValueError, "data size mismatch: expected %d", expected_size);
+        PyErr_Format(PyExc_ValueError, "[HyperGL] data size mismatch: expected %d", expected_size);
         goto cleanup;
     }
 
@@ -4119,12 +4116,12 @@ cleanup:
 static PyObject *Image_meth_mipmaps(const Image *self, PyObject *args)
 {
     if (self->renderbuffer) {
-        PyErr_Format(PyExc_TypeError, "cannot generate mipmaps for renderbuffers");
+        PyErr_Format(PyExc_TypeError, "[HyperGL] cannot generate mipmaps for renderbuffers");
         return NULL;
     }
 
     if (self->ctx->is_lost) {
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
         return NULL;
     }
 
@@ -4161,7 +4158,7 @@ static PyObject *Image_meth_read(const Image *self, PyObject *args, PyObject *kw
 
     if (self->ctx->is_lost)
     {
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
         return NULL;
     }
 
@@ -4169,7 +4166,7 @@ static PyObject *Image_meth_read(const Image *self, PyObject *args, PyObject *kw
     {
         if (into != Py_None)
         {
-            PyErr_Format(PyExc_TypeError, "cannot read into user buffer for layered images");
+            PyErr_Format(PyExc_TypeError, "[HyperGL] cannot read into user buffer for layered images");
             return NULL;
         }
 
@@ -4216,7 +4213,7 @@ static PyObject *Image_meth_blit(const Image *self, PyObject *args, PyObject *kw
 
     if (self->ctx->is_lost)
     {
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
         return NULL;
     }
 
@@ -4238,19 +4235,19 @@ static ImageFace *Image_meth_face(Image *self, PyObject *args, PyObject *kwargs)
 
     if (self->ctx->is_lost)
     {
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
         return NULL;
     }
 
     if (layer < 0 || layer >= self->layer_count)
     {
-        PyErr_Format(PyExc_ValueError, "invalid layer");
+        PyErr_Format(PyExc_ValueError, "[HyperGL] invalid layer");
         return NULL;
     }
 
     if (level > self->level_count)
     {
-        PyErr_Format(PyExc_ValueError, "invalid level");
+        PyErr_Format(PyExc_ValueError, "[HyperGL] invalid level");
         return NULL;
     }
 
@@ -4306,12 +4303,12 @@ static int Image_set_clear_value(Image *self, PyObject *value, void *closure)
     {
         if (self->fmt.clear_type == 'f' && !PyFloat_CheckExact(value))
         {
-            PyErr_Format(PyExc_TypeError, "the clear value must be a float");
+            PyErr_Format(PyExc_TypeError, "[HyperGL] the clear value must be a float");
             return -1;
         }
         if (self->fmt.clear_type == 'i' && !PyLong_CheckExact(value))
         {
-            PyErr_Format(PyExc_TypeError, "the clear value must be an int");
+            PyErr_Format(PyExc_TypeError, "[HyperGL] the clear value must be an int");
             return -1;
         }
         if (self->fmt.clear_type == 'f')
@@ -4332,7 +4329,7 @@ static int Image_set_clear_value(Image *self, PyObject *value, void *closure)
     if (!values)
     {
         PyErr_Clear();
-        PyErr_Format(PyExc_TypeError, "the clear value must be a tuple");
+        PyErr_Format(PyExc_TypeError, "[HyperGL] the clear value must be a tuple");
         return -1;
     }
 
@@ -4341,7 +4338,7 @@ static int Image_set_clear_value(Image *self, PyObject *value, void *closure)
     if (size != self->fmt.components)
     {
         Py_DECREF(values);
-        PyErr_Format(PyExc_ValueError, "invalid clear value size");
+        PyErr_Format(PyExc_ValueError, "[HyperGL] invalid clear value size");
         return -1;
     }
 
@@ -4393,6 +4390,7 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
     PyObject *uniform_layout = NULL;
     PyObject *validate = NULL;
     PyObject *layout_bindings = NULL;
+    PyObject *template_obj = NULL;
     PyObject *framebuffer_attachments = NULL;
     PyObject *vertex_array_bindings = NULL;
     PyObject *resource_bindings = NULL;
@@ -4437,14 +4435,20 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
     PyObject *render_data = Py_None;
     PyObject *includes = Py_None;
 
-    if (PyTuple_Size(args) || !kwargs) {
-        PyErr_Format(PyExc_TypeError, "pipeline only takes keyword-only arguments");
+    if (PyTuple_GET_SIZE(args) != 0 || !kwargs) {
+        PyErr_Format(PyExc_TypeError, "[HyperGL] pipeline only takes keyword-only arguments");
         return NULL;
     }
 
-    Pipeline *template = (Pipeline *)PyDict_GetItemString(kwargs, "template");
+    Pipeline *template = NULL;
+    PyObject *template_obj = PyDict_GetItemString(kwargs, "template");
+    if (template_obj) {
+        Py_INCREF(template_obj);
+        template = (Pipeline *)template_obj;
+    }
+
     if (template && Py_TYPE((PyObject *)template) != self->module_state->Pipeline_type) {
-        PyErr_Format(PyExc_ValueError, "invalid template");
+        PyErr_Format(PyExc_ValueError, "[HyperGL] invalid template");
         return NULL;
     }
 
@@ -4453,7 +4457,7 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
             PyDict_GetItemString(kwargs, "fragment_shader") || 
             PyDict_GetItemString(kwargs, "layout") || 
             PyDict_GetItemString(kwargs, "includes")) {
-            PyErr_Format(PyExc_ValueError, "cannot use template with shader/layout/includes specified");
+            PyErr_Format(PyExc_ValueError, "[HyperGL] cannot use template with shader/layout/includes specified");
             return NULL;
         }
         create_kwargs = PyDict_Copy(template->create_kwargs);
@@ -4474,8 +4478,8 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
         goto fail;
     }
 
-    if (self->is_lost) { PyErr_SetString(PyExc_RuntimeError, "context lost"); goto fail; }
-    if (!vertex_shader || !fragment_shader || !framebuffer_arg) { PyErr_SetString(PyExc_TypeError, "missing required args"); goto fail; }
+    if (self->is_lost) { PyErr_SetString(PyExc_RuntimeError, "[HyperGL] context lost"); goto fail; }
+    if (!vertex_shader || !fragment_shader || !framebuffer_arg) { PyErr_SetString(PyExc_TypeError, "[HyperGL] missing required args"); goto fail; }
 
     Viewport viewport_value;
     if (!to_viewport(&viewport_value, viewport, 0, 0, 0, 0)) goto fail;
@@ -4496,7 +4500,7 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
     {
         PyObject *tuple = PyObject_CallMethod(self->module_state->helper, "uniforms", "(OOO)", program->extra, arg_uniforms, arg_uniform_data);
         if (!tuple) goto fail;
-
+        // try not to break things here. these are borrowed refs.
         PyObject *item0 = PyTuple_GetItem(tuple, 0); 
         PyObject *item1 = PyTuple_GetItem(tuple, 1); 
         PyObject *item2 = PyTuple_GetItem(tuple, 2); 
@@ -4521,6 +4525,10 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
 
     layout_bindings = PyObject_CallMethod(self->module_state->helper, "layout_bindings", "(O)", layout);
     if (!layout_bindings) goto fail;
+    if (!PyList_Check(layout_bindings)) {
+        PyErr_SetString(PyExc_TypeError, "[HyperGL] layout_bindings must be a list");
+        goto fail;
+    }
 
     int layout_count = (int)PyList_Size(layout_bindings);
     if (layout_count > 0) {
@@ -4529,6 +4537,11 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
         bind_program_internal(self, program->obj);
         for (int i = 0; i < layout_count; ++i) {
             PyObject *obj = PyList_GetItem(layout_bindings, i);
+            if (!PyTuple_Check(obj) || PyTuple_GET_SIZE(obj) < 2) {
+                PyErr_SetString(PyExc_TypeError, "[HyperGL] invalid layout binding");
+                PyMutex_Unlock(&self->state_lock);
+                goto fail;
+            }
             PyObject *name = PyTuple_GetItem(obj, 0);
             int binding = to_int(PyTuple_GetItem(obj, 1));
             
@@ -4560,6 +4573,7 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
         viewport_value.height = to_int(PyTuple_GetItem(size, 1));
     }
 
+    // All GLObject builders must internally acquire ctx->state_lock
     framebuffer = build_framebuffer(self, framebuffer_attachments);
     if (!framebuffer) goto fail;
 
@@ -4696,11 +4710,25 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
     return res;
 
 fail:
+    if (res && res->viewport_data_buffer.obj)
+        PyBuffer_Release(&res->viewport_data_buffer);
+
+    if (res && res->render_data_buffer.obj)
+        PyBuffer_Release(&res->render_data_buffer);
+
+    if (res && res->uniform_layout_buffer.obj)
+        PyBuffer_Release(&res->uniform_layout_buffer);
+
+    if (res && res->uniform_data_buffer.obj)
+        PyBuffer_Release(&res->uniform_data_buffer);
+
+
     Py_XDECREF(create_kwargs);
     Py_XDECREF(program);
     Py_XDECREF(uniforms);
     Py_XDECREF(uniform_layout);
     Py_XDECREF(uniform_data);
+    Py_XDECREF(template_obj);
     if (framebuffer) Py_DECREF(framebuffer);
     if (vertex_array) Py_DECREF(vertex_array);
     if (descriptor_set) Py_DECREF(descriptor_set);
@@ -4752,7 +4780,7 @@ static int Pipeline_clear(Pipeline *self) {
 static PyObject *Pipeline_meth_render(const Pipeline *self, PyObject *args) // LGTM. Don’t overthink this path. Indirect handles the scaling problem.
 {
     if (self->ctx->is_lost) {
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
         return NULL;
     }
 
@@ -4803,12 +4831,12 @@ static PyObject *Pipeline_meth_render_indirect(const Pipeline *self, PyObject *a
     }
 
     if (draw_count < 0) {
-        PyErr_SetString(PyExc_ValueError, "count must be >= 0");
+        PyErr_SetString(PyExc_ValueError, "[HyperGL] count must be >= 0");
         return NULL;
     }
 
     if (offset < 0) {
-        PyErr_SetString(PyExc_ValueError, "offset must be >= 0");
+        PyErr_SetString(PyExc_ValueError, "[HyperGL] offset must be >= 0");
         return NULL;
     }
 
@@ -4817,26 +4845,26 @@ static PyObject *Pipeline_meth_render_indirect(const Pipeline *self, PyObject *a
     }
 
     if (self->ctx->is_lost) {
-        PyErr_Format(PyExc_RuntimeError, "context lost");
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] context lost");
         return NULL;
     }
 
     // --- AZDO Check ---
     if (self->index_type) {
         if (!glMultiDrawElementsIndirect) {
-            PyErr_SetString(PyExc_RuntimeError, "glMultiDrawElementsIndirect not supported/loaded on this hardware.");
+            PyErr_SetString(PyExc_RuntimeError, "[HyperGL] glMultiDrawElementsIndirect not supported/loaded on this hardware.");
             return NULL;
         }
     } else {
         if (!glMultiDrawArraysIndirect) {
-            PyErr_SetString(PyExc_RuntimeError, "glMultiDrawArraysIndirect not supported/loaded on this hardware.");
+            PyErr_SetString(PyExc_RuntimeError, "[HyperGL] glMultiDrawArraysIndirect not supported/loaded on this hardware.");
             return NULL;
         }
     }
     // ------------------
 
     if (!PyObject_TypeCheck(buffer_obj, self->ctx->module_state->Buffer_type)) {
-        PyErr_SetString(PyExc_TypeError, "buffer must be a Buffer object");
+        PyErr_SetString(PyExc_TypeError, "[HyperGL] buffer must be a Buffer object");
         return NULL;
     }
     Buffer *indirect_buffer = (Buffer *)buffer_obj;
@@ -4873,7 +4901,7 @@ static PyObject *Pipeline_meth_render_indirect(const Pipeline *self, PyObject *a
     : sizeof(DrawArraysIndirectCommand);
 
     if (stride < command_size || (stride % 4) != 0) {
-        PyErr_SetString(PyExc_ValueError, "invalid indirect stride");
+        PyErr_SetString(PyExc_ValueError, "[HyperGL] invalid indirect stride");
         PyMutex_Unlock(&self->ctx->state_lock);
         return NULL;
     }
@@ -4881,7 +4909,7 @@ static PyObject *Pipeline_meth_render_indirect(const Pipeline *self, PyObject *a
     intptr_t byte_offset = (intptr_t)offset * command_size;
     size_t required = byte_offset + (size_t)draw_count * stride;
     if (required > indirect_buffer->size) {
-        PyErr_SetString(PyExc_ValueError, "indirect buffer too small");
+        PyErr_SetString(PyExc_ValueError, "[HyperGL] indirect buffer too small");
         PyMutex_Unlock(&self->ctx->state_lock);
         return NULL;
     }
@@ -4927,7 +4955,7 @@ static int Pipeline_set_viewport(Pipeline *self, PyObject *viewport, void *closu
 {
     if (!to_viewport(&self->viewport, viewport, 0, 0, 0, 0))
     {
-        PyErr_Format(PyExc_TypeError, "the viewport must be a tuple of 4 ints");
+        PyErr_Format(PyExc_TypeError, "[HyperGL] the viewport must be a tuple of 4 ints");
         return -1;
     }
     return 0;
@@ -4944,10 +4972,10 @@ static PyObject *Compute_meth_run(Compute *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "|iii", &x, &y, &z)) return NULL;
 
     VALIDATE(x > 0 && y > 0 && z > 0, PyExc_ValueError, 
-        "Dispatch dimensions must be positive");
+        "[HyperGL] Dispatch dimensions must be positive");
 
     if (self->ctx->is_lost) {
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
         return NULL;
     }
 
@@ -5000,7 +5028,7 @@ static Compute *Context_meth_compute(Context *self, PyObject *args, PyObject *kw
         shader_bytes = compute_shader;
         Py_INCREF(shader_bytes);
     } else {
-        PyErr_Format(PyExc_TypeError, "compute_shader must be str or bytes");
+        PyErr_Format(PyExc_TypeError, "[HyperGL] compute_shader must be str or bytes");
         goto fail;
     }
 
@@ -5018,7 +5046,7 @@ static Compute *Context_meth_compute(Context *self, PyObject *args, PyObject *kw
 
         PyObject *uniform_dict = PyTuple_GetItem(tuple, 0);
         if (!uniform_dict || !PyDict_Check(uniform_dict)) {
-            PyErr_Format(PyExc_RuntimeError, "uniforms helper returned invalid layout");
+            PyErr_Format(PyExc_RuntimeError, "[HyperGL] uniforms helper returned invalid layout");
             goto fail;
         }
         
@@ -5109,7 +5137,7 @@ Context_meth_pack_indirect(Context *self, PyObject *args, PyObject *kwargs)
         return NULL;
 
     if (!PySequence_Check(commands)) {
-        PyErr_SetString(PyExc_TypeError, "commands must be a sequence");
+        PyErr_SetString(PyExc_TypeError, "[HyperGL] commands must be a sequence");
         return NULL;
     }
 
@@ -5141,7 +5169,7 @@ Context_meth_pack_indirect(Context *self, PyObject *args, PyObject *kwargs)
             Py_DECREF(cmd);
             Py_DECREF(result);
             PyErr_Format(PyExc_TypeError,
-                         "Command at index %zd is not a sequence", i);
+                         "[HyperGL] Command at index %zd is not a sequence", i);
             return NULL;
         }
 
@@ -5157,7 +5185,7 @@ Context_meth_pack_indirect(Context *self, PyObject *args, PyObject *kwargs)
                 Py_DECREF(cmd);
                 Py_DECREF(result);
                 PyErr_Format(PyExc_ValueError,
-                             "Indexed command %zd must have 4 or 5 values", i);
+                             "[HyperGL] Indexed command %zd must have 4 or 5 values", i);
                 return NULL;
             }
         } else {
@@ -5165,7 +5193,7 @@ Context_meth_pack_indirect(Context *self, PyObject *args, PyObject *kwargs)
                 Py_DECREF(cmd);
                 Py_DECREF(result);
                 PyErr_Format(PyExc_ValueError,
-                             "Non-indexed command %zd must have exactly 4 values", i);
+                             "[HyperGL] Non-indexed command %zd must have exactly 4 values", i);
                 return NULL;
             }
         }
@@ -5193,7 +5221,7 @@ Context_meth_pack_indirect(Context *self, PyObject *args, PyObject *kwargs)
                     Py_DECREF(cmd);
                     Py_DECREF(result);
                     PyErr_SetString(PyExc_ValueError,
-                                    "baseVertex out of int32 range");
+                                    "[HyperGL] baseVertex out of int32 range");
                     return NULL;
                 }
                 baseVertex = (int32_t)v;
@@ -5209,7 +5237,7 @@ Context_meth_pack_indirect(Context *self, PyObject *args, PyObject *kwargs)
                     Py_DECREF(cmd);
                     Py_DECREF(result);
                     PyErr_SetString(PyExc_ValueError,
-                                    "Value out of uint32 range");
+                                    "[HyperGL] Value out of uint32 range");
                     return NULL;
                 }
                 u[k] = (uint32_t)v;
@@ -5260,7 +5288,7 @@ static PyObject *Context_meth_new_frame(Context *self, PyObject *args, PyObject 
         return NULL;
 
     if (self->is_lost) {
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
         return NULL;
     }
 
@@ -5327,7 +5355,7 @@ static PyObject *Context_meth_end_frame(Context *self, PyObject *args, PyObject 
         return NULL;
 
     if (self->is_lost) {
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
         return NULL;
     }
 
@@ -5470,7 +5498,7 @@ static int Context_set_screen(const Context *self, PyObject *value, void *closur
 {
     if (!PyLong_CheckExact(value))
     {
-        PyErr_Format(PyExc_TypeError, "screen must be an int");
+        PyErr_Format(PyExc_TypeError, "[HyperGL] screen must be an int");
         return -1;
     }
     self->default_framebuffer->obj = to_int(value);
@@ -5650,7 +5678,7 @@ static PyObject *meth_inspect(PyObject *self, PyObject *arg)
 static PyObject *ImageFace_meth_clear(const ImageFace *self, PyObject *args)
 {
     if (self->ctx->is_lost) {
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
         return NULL;
     }
 
@@ -5684,7 +5712,7 @@ static PyObject *ImageFace_meth_read(ImageFace *self, PyObject *args, PyObject *
     }
 
     if (self->ctx->is_lost) {
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
         return NULL;
     }
 
@@ -5707,7 +5735,7 @@ static PyObject *ImageFace_meth_blit(const ImageFace *self, PyObject *args, PyOb
     }
 
     if (self->ctx->is_lost) {
-        PyErr_Format(PyExc_RuntimeError, "the context is lost");
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
         return NULL;
     }
 
@@ -6219,7 +6247,7 @@ static int module_exec(PyObject *self)
     ModuleState *state = (ModuleState *)PyModule_GetState(self);
     if (!state) return -1;
 
-    // --- read VERSION file ---
+    // --- read VERSION ---
     PyModule_AddObject(self, "__version__", PyUnicode_FromString(HYPERGL_VERSION));
 
     memset(&state->global_lock, 0, sizeof(PyMutex));
@@ -6313,12 +6341,12 @@ static PyObject *meth_load_opengl_function(PyObject *self, PyObject *arg)
     void *(*wgl)(const char *) = state->wglGetProcAddress;
     PyMutex_Unlock(&state->global_lock);
 
-    if (!h) return PyErr_SetString(PyExc_RuntimeError, "No GL DLL"), NULL;
+    if (!h) return PyErr_SetString(PyExc_RuntimeError, "[HyperGL] No GL DLL"), NULL;
 
     void *proc = (void *)GetProcAddress(h, name);
     if (!proc && wgl) proc = (void *)wgl(name);
 
-    return proc ? PyLong_FromVoidPtr(proc) : (PyErr_Format(PyExc_RuntimeError, "GL func %s not found", name), NULL);
+    return proc ? PyLong_FromVoidPtr(proc) : (PyErr_Format(PyExc_RuntimeError, "[HyperGL] GL func %s not found", name), NULL);
 }
 #endif
 
