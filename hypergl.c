@@ -184,6 +184,7 @@ static void *load_opengl_function(PyObject *loader_function, const char *method)
     }
     void *ptr = PyLong_AsVoidPtr(res);
     if (!ptr && PyErr_Occurred()) {
+        Py_DECREF(res);
         return NULL;
     }
     Py_DECREF(res);
@@ -213,6 +214,11 @@ static int load_gl(PyObject *loader)
 #define load(name) \
     do { \
         void *temp_ptr = load_opengl_function(loader_function, #name); \
+        if (!temp_ptr && PyErr_Occurred()) {                \
+            Py_DECREF(loader_function);                             \
+            Py_DECREF(missing);                             \
+            return -1;                                          \
+        }\
         memcpy((void *)&(name), (const void *)&temp_ptr, sizeof(void*)); \
         check(name); \
     } while(0)
@@ -341,8 +347,15 @@ static int load_gl(PyObject *loader)
     load(glGetProgramResourceName);
     load(glGetBufferParameteriv);
 
-    #define load_optional(name) \
-        *(void **)&(name) = load_opengl_function(loader_function, #name);
+    #define load_optional(name)                       \
+    do {                                          \
+        void *_opt = load_opengl_function(loader_function, #name);   \
+        if (!_opt && PyErr_Occurred()) {           \
+            PyErr_Clear();                        \
+        }                                         \
+        memcpy(&(name), &_opt, sizeof(void*));    \
+    } while (0)
+
 
     load_optional(glGetTextureHandleARB);
     load_optional(glMakeTextureHandleResidentARB);
@@ -1012,7 +1025,11 @@ static int ImageFace_clear(ImageFace *self)
 }
 
 // Helper for SharedTrash support
-static void gl_object_init(const Context *ctx, GLObject *obj, const int id, const int type) {
+static void gl_object_init(const Context *restrict ctx,
+                           GLObject *restrict obj,
+                           int id,
+                           int type)
+{
     obj->obj = id;
     obj->type = type;
     obj->uses = 1;
@@ -5226,143 +5243,180 @@ Context_meth_pack_indirect(Context *self, PyObject *args, PyObject *kwargs)
                                     keywords, &commands, &indexed))
         return NULL;
 
-    if (!PySequence_Check(commands)) {
-        PyErr_SetString(PyExc_TypeError, "[HyperGL] commands must be a sequence");
+    // OPTIMIZATION: Convert outer sequence to a fast array
+    PyObject *fast_commands = PySequence_Fast(commands, "[HyperGL] commands must be a sequence");
+    if (!fast_commands) {
         return NULL;
     }
 
-    Py_ssize_t count = PySequence_Size(commands);
-    if (count < 0)
-        return NULL;
-
-    if (count == 0)
+    Py_ssize_t count = PySequence_Fast_GET_SIZE(fast_commands);
+    if (count == 0) {
+        Py_DECREF(fast_commands);
         return PyBytes_FromStringAndSize("", 0);
+    }
 
+    // Determine sizes
     const Py_ssize_t stride = indexed ? 20 : 16;
     const Py_ssize_t total_size = count * stride;
 
     PyObject *result = PyBytes_FromStringAndSize(NULL, total_size);
-    if (!result)
+    if (!result) {
+        Py_DECREF(fast_commands);
         return NULL;
+    }
 
-    unsigned char *ptr = (unsigned char *)PyBytes_AsString(result);
-    memset(ptr, 0, total_size);
+    unsigned char *base_ptr = (unsigned char *)PyBytes_AsString(result);
+    // Zero out memory so padding bytes (if any) or implicit zeros are clean
+    memset(base_ptr, 0, total_size); 
+
+    PyObject **items = PySequence_Fast_ITEMS(fast_commands);
+    int error_occurred = 0;
 
     for (Py_ssize_t i = 0; i < count; i++) {
-        PyObject *cmd = PySequence_GetItem(commands, i);
-        if (!cmd) {
-            Py_DECREF(result);
-            return NULL;
+        // OPTIMIZATION: Direct pointer access (borrowed ref)
+        PyObject *cmd = items[i];
+
+        // OPTIMIZATION: Convert inner sequence to fast array
+        PyObject *fast_cmd = PySequence_Fast(cmd, "[HyperGL] Command is not a sequence");
+        if (!fast_cmd) {
+            error_occurred = 1;
+            break;
         }
 
-        if (!PySequence_Check(cmd)) {
-            Py_DECREF(cmd);
-            Py_DECREF(result);
-            PyErr_Format(PyExc_TypeError,
-                         "[HyperGL] Command at index %zd is not a sequence", i);
-            return NULL;
-        }
+        Py_ssize_t inputs = PySequence_Fast_GET_SIZE(fast_cmd);
+        PyObject **cmd_items = PySequence_Fast_ITEMS(fast_cmd);
 
-        Py_ssize_t inputs = PySequence_Size(cmd);
-        if (inputs < 0) {
-            Py_DECREF(cmd);
-            Py_DECREF(result);
-            return NULL;
-        }
+        unsigned char *current_struct_ptr = base_ptr + (i * stride);
 
         if (indexed) {
+            // --- INDEXED PATH ---
             if (inputs != 4 && inputs != 5) {
-                Py_DECREF(cmd);
-                Py_DECREF(result);
-                PyErr_Format(PyExc_ValueError,
-                             "[HyperGL] Indexed command %zd must have 4 or 5 values", i);
-                return NULL;
-            }
-        } else {
-            if (inputs != 4) {
-                Py_DECREF(cmd);
-                Py_DECREF(result);
-                PyErr_Format(PyExc_ValueError,
-                             "[HyperGL] Non-indexed command %zd must have exactly 4 values", i);
-                return NULL;
-            }
-        }
-
-        uint32_t u[5] = {0};
-        int32_t baseVertex = 0;
-
-        for (Py_ssize_t k = 0; k < inputs; k++) {
-            PyObject *item = PySequence_GetItem(cmd, k);
-            if (!item) {
-                Py_DECREF(cmd);
-                Py_DECREF(result);
-                return NULL;
+                PyErr_Format(PyExc_ValueError, 
+                    "[HyperGL] Indexed command %zd must have 4 or 5 values", i);
+                Py_DECREF(fast_cmd);
+                error_occurred = 1;
+                break;
             }
 
-            if (indexed && inputs == 5 && k == 3) {
-                long v = PyLong_AsLong(item);
-                Py_DECREF(item);
-                if (PyErr_Occurred()) {
-                    Py_DECREF(cmd);
-                    Py_DECREF(result);
-                    return NULL;
-                }
-                if (v < INT32_MIN || v > INT32_MAX) {
-                    Py_DECREF(cmd);
-                    Py_DECREF(result);
-                    PyErr_SetString(PyExc_ValueError,
-                                    "[HyperGL] baseVertex out of int32 range");
-                    return NULL;
-                }
-                baseVertex = (int32_t)v;
-            } else {
-                unsigned long v = PyLong_AsUnsignedLong(item);
-                Py_DECREF(item);
-                if (PyErr_Occurred()) {
-                    Py_DECREF(cmd);
-                    Py_DECREF(result);
-                    return NULL;
-                }
-                if (v > UINT32_MAX) {
-                    Py_DECREF(cmd);
-                    Py_DECREF(result);
-                    PyErr_SetString(PyExc_ValueError,
-                                    "[HyperGL] Value out of uint32 range");
-                    return NULL;
-                }
-                u[k] = (uint32_t)v;
-            }
-        }
-
-        if (indexed) {
             struct DrawElementsIndirectCommand {
                 uint32_t count;
                 uint32_t instanceCount;
                 uint32_t firstIndex;
                 int32_t  baseVertex;
                 uint32_t baseInstance;
-            } *out = (void *)(ptr + (i * stride));
+            } *out = (void *)current_struct_ptr;
 
-            out->count         = u[0];
-            out->instanceCount = u[1];
-            out->firstIndex    = u[2];
-            out->baseVertex    = (inputs == 5) ? baseVertex : 0;
-            out->baseInstance  = (inputs == 5) ? u[4] : u[3];
+            unsigned long long val;
+            long long sval;
+
+            // 1. count
+            val = PyLong_AsUnsignedLongLong(cmd_items[0]);
+            if (val == (unsigned long long)-1 && PyErr_Occurred()) goto index_error;
+            if (val > UINT32_MAX) goto range_error;
+            out->count = (uint32_t)val;
+
+            // 2. instanceCount
+            val = PyLong_AsUnsignedLongLong(cmd_items[1]);
+            if (val == (unsigned long long)-1 && PyErr_Occurred()) goto index_error;
+            if (val > UINT32_MAX) goto range_error;
+            out->instanceCount = (uint32_t)val;
+
+            // 3. firstIndex
+            val = PyLong_AsUnsignedLongLong(cmd_items[2]);
+            if (val == (unsigned long long)-1 && PyErr_Occurred()) goto index_error;
+            if (val > UINT32_MAX) goto range_error;
+            out->firstIndex = (uint32_t)val;
+
+            if (inputs == 5) {
+                // 4. baseVertex (Signed)
+                sval = PyLong_AsLongLong(cmd_items[3]);
+                if (sval == -1 && PyErr_Occurred()) goto index_error;
+                if (sval < INT32_MIN || sval > INT32_MAX) goto range_error;
+                out->baseVertex = (int32_t)sval;
+
+                // 5. baseInstance
+                val = PyLong_AsUnsignedLongLong(cmd_items[4]);
+                if (val == (unsigned long long)-1 && PyErr_Occurred()) goto index_error;
+                if (val > UINT32_MAX) goto range_error;
+                out->baseInstance = (uint32_t)val;
+            } else {
+                // inputs == 4
+                // baseVertex is implicitly 0
+                out->baseVertex = 0;
+
+                // 4. baseInstance (taken from item index 3)
+                val = PyLong_AsUnsignedLongLong(cmd_items[3]);
+                if (val == (unsigned long long)-1 && PyErr_Occurred()) goto index_error;
+                if (val > UINT32_MAX) goto range_error;
+                out->baseInstance = (uint32_t)val;
+            }
+
         } else {
+            // --- ARRAY PATH ---
+            if (inputs != 4) {
+                PyErr_Format(PyExc_ValueError, 
+                    "[HyperGL] Non-indexed command %zd must have exactly 4 values", i);
+                Py_DECREF(fast_cmd);
+                error_occurred = 1;
+                break;
+            }
+
             struct DrawArraysIndirectCommand {
                 uint32_t count;
                 uint32_t instanceCount;
                 uint32_t first;
                 uint32_t baseInstance;
-            } *out = (void *)(ptr + (i * stride));
+            } *out = (void *)current_struct_ptr;
 
-            out->count         = u[0];
-            out->instanceCount = u[1];
-            out->first         = u[2];
-            out->baseInstance  = u[3];
+            unsigned long long val;
+
+            // 1. count
+            val = PyLong_AsUnsignedLongLong(cmd_items[0]);
+            if (val == (unsigned long long)-1 && PyErr_Occurred()) goto array_error;
+            if (val > UINT32_MAX) goto range_error;
+            out->count = (uint32_t)val;
+
+            // 2. instanceCount
+            val = PyLong_AsUnsignedLongLong(cmd_items[1]);
+            if (val == (unsigned long long)-1 && PyErr_Occurred()) goto array_error;
+            if (val > UINT32_MAX) goto range_error;
+            out->instanceCount = (uint32_t)val;
+
+            // 3. first
+            val = PyLong_AsUnsignedLongLong(cmd_items[2]);
+            if (val == (unsigned long long)-1 && PyErr_Occurred()) goto array_error;
+            if (val > UINT32_MAX) goto range_error;
+            out->first = (uint32_t)val;
+
+            // 4. baseInstance
+            val = PyLong_AsUnsignedLongLong(cmd_items[3]);
+            if (val == (unsigned long long)-1 && PyErr_Occurred()) goto array_error;
+            if (val > UINT32_MAX) goto range_error;
+            out->baseInstance = (uint32_t)val;
         }
 
-        Py_DECREF(cmd);
+        Py_DECREF(fast_cmd);
+        continue;
+
+    // Error handling block
+    index_error:
+    array_error:
+        error_occurred = 1;
+        Py_DECREF(fast_cmd);
+        break;
+        
+    range_error:
+        PyErr_SetString(PyExc_ValueError, "[HyperGL] Value out of range for indirect buffer");
+        error_occurred = 1;
+        Py_DECREF(fast_cmd);
+        break;
+    }
+
+    Py_DECREF(fast_commands);
+
+    if (error_occurred) {
+        Py_DECREF(result);
+        return NULL;
     }
 
     return result;
