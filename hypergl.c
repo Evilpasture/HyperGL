@@ -1312,7 +1312,7 @@ static DescriptorSetBuffers build_descriptor_set_buffers(const Context *self, Py
         if (PyErr_Occurred()) goto error_cleanup;
 
         if (binding < 0 || binding >= MAX_BUFFER_BINDINGS) {
-            PyErr_Format(PyExc_IndexError, "[HyperGL] Buffer binding %d exceeds MAX_BUFFER_BINDINGS (%d)", 
+            PyErr_Format(PyExc_IndexError, "[HyperGL] Buffer binding %d exceeds MAX_BUFFER_BINDINGS (%d)",
                          binding, MAX_BUFFER_BINDINGS);
             goto error_cleanup;
         }
@@ -2476,7 +2476,7 @@ static PyObject *meth_init(PyObject *self, PyObject *args, PyObject *kwargs)
     ModuleState *module_state = PyModule_GetState(self);
     if (!module_state) return NULL; 
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|Op", keywords, &loader, &headless)) 
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|Op", keywords, &loader, &headless))
         return NULL;
 
     PyMutex_Lock(&module_state->setup_lock);
@@ -2498,7 +2498,7 @@ static PyObject *meth_init(PyObject *self, PyObject *args, PyObject *kwargs)
     }
 
     // 2. Check if resolution failed
-    if (!new_loader){ 
+    if (!new_loader){
         // ensure an error exists
         if (!PyErr_Occurred())
             PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Failed to resolve loader");
@@ -2507,7 +2507,7 @@ static PyObject *meth_init(PyObject *self, PyObject *args, PyObject *kwargs)
 
     // 3. Internal Init
     // init_internal() does NOT steal a reference to new_loader
-    if (init_internal(module_state, self, new_loader) < 0) { 
+    if (init_internal(module_state, self, new_loader) < 0) {
         if (!PyErr_Occurred()) {
             PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Internal init failed");
         }
