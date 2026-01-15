@@ -2429,7 +2429,7 @@ static PyObject *read_image_face(ImageFace *src, IntPair size, IntPair offset, P
             return NULL;
         }
 
-        char *ptr = (char *)(intptr_t)buffer_view->offset;
+        char *ptr = (char *)((unsigned char *)NULL + buffer_view->offset);
         PyMutex_Lock(&src->ctx->state_lock);
         bind_read_framebuffer_internal(src->ctx, src->framebuffer->obj);
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
@@ -4183,7 +4183,10 @@ static PyObject *Image_meth_write(const Image *self, PyObject *args, PyObject *k
     glActiveTexture(self->ctx->default_texture_unit);
     glBindTexture(self->target, self->image);
 
-    void *pixels = buffer_view ? (void *)(intptr_t)buffer_view->offset : view.buf;
+    void *pixels = buffer_view 
+               ? (unsigned char *)NULL + buffer_view->offset 
+               : view.buf;
+
     if (buffer_view) glBindBuffer(GL_PIXEL_UNPACK_BUFFER, buffer_view->buffer->buffer);
 
     if (self->cubemap) {
@@ -5026,7 +5029,7 @@ static PyObject *Pipeline_meth_render_indirect(const Pipeline *self, PyObject *a
         GL_COMMAND_BARRIER_BIT |
         GL_SHADER_STORAGE_BARRIER_BIT
     );
-    const void *indirect_offset = (const void *)(uintptr_t)byte_offset;
+    const void *indirect_offset = (const void *)((unsigned char *)NULL + byte_offset);
     if (self->index_type) {
         // Indexed Draw
         glMultiDrawElementsIndirect(
