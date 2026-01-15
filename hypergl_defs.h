@@ -2,6 +2,7 @@
 #define HYPERGL_DEFS_H
 
 #include <Python.h>
+#include <stddef.h>
 #include <stdint.h>
 
 // --- Compiler Hints ---
