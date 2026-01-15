@@ -5422,48 +5422,55 @@ Context_meth_pack_indirect(Context *self, PyObject *args, PyObject *kwargs)
     return result;
 }
 
-static PyObject *Context_meth_new_frame(Context *self, PyObject *args, PyObject *kwargs)
+static PyObject *
+Context_meth_new_frame(Context *self, PyObject *args, PyObject *kwargs)
 {
     static char *keywords[] = {"reset", "clear", NULL};
     int reset = 1;
     int clear = 1;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|pp", keywords, &reset, &clear))
-        return NULL;
+    // Fast path: if no arguments are provided, skip expensive parsing
+    if (PyTuple_GET_SIZE(args) > 0 || (kwargs && PyDict_Size(kwargs) > 0)) {
+        if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|pp", keywords, &reset, &clear))
+            return NULL;
+    }
 
     if (self->is_lost) {
         PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
         return NULL;
     }
 
-    // Process deletion queue outside of lock
+    // Process deletion queue
     flush_trash(self);
+
+    // Holders for objects to be decremented OUTSIDE the lock
+    PyObject *trash_desc = NULL;
+    GlobalSettings *trash_settings = NULL;
 
     PyMutex_Lock(&self->state_lock);
 
-     if (reset) {
+    // 1. RESET LOGIC
+    if (reset) {
+        // Release DescriptorSet
         if (self->current_descriptor_set) {
-            DescriptorSet *tmp = self->current_descriptor_set;
-            // release_* handles atomic decrements and cache removal
-            release_descriptor_set(self, tmp, 1);
-            
-            // Safe decref dance
-            PyMutex_Unlock(&self->state_lock);
-            Py_DECREF(tmp);
-            PyMutex_Lock(&self->state_lock);
+            trash_desc = (PyObject *)self->current_descriptor_set;
+            release_descriptor_set(self, self->current_descriptor_set, 1);
             self->current_descriptor_set = NULL;
         }
 
+        // Release GlobalSettings
         if (self->current_global_settings) {
-            GlobalSettings *tmp = self->current_global_settings;
-            release_global_settings(self, tmp, 1);
+            trash_settings = self->current_global_settings;
+            release_global_settings(self, trash_settings, 1);
             self->current_global_settings = NULL; 
         }
 
+        // Reset bitfields
         self->is_stencil_default = 0;
         self->is_mask_default = 0;
         self->is_blend_default = 0;
         
+        // Reset cached IDs
         self->current_viewport = (Viewport){-1, -1, -1, -1};
         self->current_read_framebuffer = -1;
         self->current_draw_framebuffer = -1;
@@ -5471,32 +5478,56 @@ static PyObject *Context_meth_new_frame(Context *self, PyObject *args, PyObject 
         self->current_vertex_array = -1;
         self->current_depth_mask = 0;
         self->current_stencil_mask = 0;
+
+        // CRITICAL FIX: Invalidate shadow state.
+        // We set everything to UNKNOWN (-1) so next calls force an update.
+        // This handles cases where external C/ctypes calls might have dirtied the GL state.
+        memset(&self->gl_state, GL_STATE_UNKNOWN, sizeof(self->gl_state));
     }
 
+    // 2. CLEAR LOGIC
     if (clear) {
-        bind_draw_framebuffer_internal(self, self->default_framebuffer->obj);
+        int default_fbo = self->default_framebuffer->obj;
+        // Only bind if we aren't already bound
+        if (self->current_draw_framebuffer != default_fbo) {
+            bind_draw_framebuffer_internal(self, default_fbo);
+        }
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     }
 
-    // Enable standard features for the new frame
-    if (!self->is_webgl) glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+    // 3. STATE ENFORCEMENT
+    // Apply standard features for the new frame.
+    // Thanks to the shadow state check, these are free if already enabled.
+    
+    if (!self->is_webgl) {
+        LOCKED_GL_ENABLE_STATE(GL_PRIMITIVE_RESTART_FIXED_INDEX, primitive_restart);
+    }
+
     if (!self->is_gles) {
-        glEnable(GL_PROGRAM_POINT_SIZE);
-        glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+        LOCKED_GL_ENABLE_STATE(GL_PROGRAM_POINT_SIZE, program_point_size);
+        LOCKED_GL_ENABLE_STATE(GL_TEXTURE_CUBE_MAP_SEAMLESS, seamless_cube);
     }
 
     PyMutex_Unlock(&self->state_lock);
+
+    // Cleanup python objects outside the lock
+    Py_XDECREF(trash_desc);
+    // Py_XDECREF((PyObject *)trash_settings); 
+
     Py_RETURN_NONE;
 }
 
-static PyObject *Context_meth_end_frame(Context *self, PyObject *args, PyObject *kwargs)
+static PyObject *
+Context_meth_end_frame(Context *self, PyObject *args, PyObject *kwargs)
 {
     static char *keywords[] = {"clean", "flush", NULL};
     int clean = 1;
     int flush = 1;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|pp", keywords, &clean, &flush))
-        return NULL;
+    if (PyTuple_GET_SIZE(args) > 0 || (kwargs && PyDict_Size(kwargs) > 0)) {
+        if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|pp", keywords, &clean, &flush))
+            return NULL;
+    }
 
     if (self->is_lost) {
         PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
@@ -5505,45 +5536,54 @@ static PyObject *Context_meth_end_frame(Context *self, PyObject *args, PyObject 
 
     flush_trash(self);
 
+    PyObject *trash_desc = NULL;
+    GlobalSettings *trash_settings = NULL;
+
     PyMutex_Lock(&self->state_lock);
 
     if (clean)
     {
-        bind_draw_framebuffer_internal(self, 0);
-        bind_program_internal(self, 0);
-        bind_vertex_array_internal(self, 0);
+        // 1. Unbind GL Objects
+        if (self->current_draw_framebuffer != 0) bind_draw_framebuffer_internal(self, 0);
+        if (self->current_program != 0)          bind_program_internal(self, 0);
+        if (self->current_vertex_array != 0)     bind_vertex_array_internal(self, 0);
 
+        // 2. Release Internal Resources
         if (self->current_descriptor_set) {
-            DescriptorSet *tmp = self->current_descriptor_set;
+            trash_desc = (PyObject *)self->current_descriptor_set;
+            release_descriptor_set(self, self->current_descriptor_set, 1); 
             self->current_descriptor_set = NULL;
-            release_descriptor_set(self, tmp, 1); 
-            
-            PyMutex_Unlock(&self->state_lock);
-            Py_DECREF(tmp);
-            PyMutex_Lock(&self->state_lock);
         }
 
         if (self->current_global_settings) {
-            GlobalSettings *tmp = self->current_global_settings;
-            release_global_settings(self, tmp, 1);
+            trash_settings = self->current_global_settings;
+            release_global_settings(self, trash_settings, 1);
             self->current_global_settings = NULL;
         }
 
-        glActiveTexture(self->default_texture_unit);
-
-        glDisable(GL_CULL_FACE);
-        glDisable(GL_DEPTH_TEST);
-        glDisable(GL_STENCIL_TEST);
-        glDisable(GL_BLEND);
-
-        if (!self->is_webgl)
-            glDisable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
-
-        if (!self->is_gles) {
-            glDisable(GL_PROGRAM_POINT_SIZE);
-            glDisable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+        // 3. Reset Active Texture
+        // Safety check: GL_TEXTURE0 is 0x84C0, not 0.
+        // If default_texture_unit is 0, it's likely uninitialized.
+        if (self->default_texture_unit != 0) {
+            glActiveTexture(self->default_texture_unit);
         }
 
+        // 4. Disable States (using Shadow Cache)
+        LOCKED_GL_DISABLE_STATE(GL_CULL_FACE, cull_face);
+        LOCKED_GL_DISABLE_STATE(GL_DEPTH_TEST, depth_test);
+        LOCKED_GL_DISABLE_STATE(GL_STENCIL_TEST, stencil_test);
+        LOCKED_GL_DISABLE_STATE(GL_BLEND, blend);
+
+        if (!self->is_webgl) {
+            LOCKED_GL_DISABLE_STATE(GL_PRIMITIVE_RESTART_FIXED_INDEX, primitive_restart);
+        }
+
+        if (!self->is_gles) {
+            LOCKED_GL_DISABLE_STATE(GL_PROGRAM_POINT_SIZE, program_point_size);
+            LOCKED_GL_DISABLE_STATE(GL_TEXTURE_CUBE_MAP_SEAMLESS, seamless_cube);
+        }
+
+        // Reset Python-side flags
         self->is_blend_default = 0;
         self->is_stencil_default = 0;
         self->is_mask_default = 0;
@@ -5554,6 +5594,10 @@ static PyObject *Context_meth_end_frame(Context *self, PyObject *args, PyObject 
     }
 
     PyMutex_Unlock(&self->state_lock);
+
+    Py_XDECREF(trash_desc);
+    // Py_XDECREF((PyObject *)trash_settings); 
+
     Py_RETURN_NONE;
 }
 

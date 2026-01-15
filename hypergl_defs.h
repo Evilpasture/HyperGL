@@ -156,6 +156,28 @@
     #define VALIDATE_LOCKED(ctx, cond, exc, fmt, ...) ((void)0)
 #endif
 
+#define GL_STATE_UNKNOWN  -1
+#define GL_STATE_DISABLED  0
+#define GL_STATE_ENABLED   1
+
+// OPTIMIZATION: Zero-cost state filtering. 
+// NOTE: These macros MUST be called while self->state_lock is HELD.
+#define LOCKED_GL_ENABLE_STATE(GL_ENUM, FIELD) \
+    do { \
+        if (self->gl_state.FIELD != GL_STATE_ENABLED) { \
+            glEnable(GL_ENUM); \
+            self->gl_state.FIELD = GL_STATE_ENABLED; \
+        } \
+    } while (0)
+
+#define LOCKED_GL_DISABLE_STATE(GL_ENUM, FIELD) \
+    do { \
+        if (self->gl_state.FIELD != GL_STATE_DISABLED) { \
+            glDisable(GL_ENUM); \
+            self->gl_state.FIELD = GL_STATE_DISABLED; \
+        } \
+    } while (0)
+
 // --- Struct Definitions ---
 
 typedef unsigned long long GLuint64;
@@ -367,6 +389,17 @@ typedef struct GlobalSettings
     BlendState blend;
 } GlobalSettings;
 
+typedef struct GLStateShadow {
+    int8_t cull_face;
+    int8_t depth_test;
+    int8_t stencil_test;
+    int8_t blend;
+    int8_t primitive_restart;
+    int8_t program_point_size;
+    int8_t seamless_cube;
+    int8_t _pad; // keep alignment
+} GLStateShadow;
+
 typedef struct Context
 {
     PyObject_HEAD
@@ -399,8 +432,11 @@ typedef struct Context
     unsigned int is_stencil_default   : 1;
     unsigned int is_blend_default     : 1;
     unsigned int padding_bits         : 5;
+    GLStateShadow gl_state;
     Viewport current_viewport;
 } Context;
+
+
 
 typedef struct Buffer
 {
