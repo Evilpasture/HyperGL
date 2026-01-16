@@ -3249,7 +3249,7 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
     return PyErr_NoMemory();
   }
 
-  shared->bin = PyMem_Malloc(4096 * sizeof(TrashItem));
+  shared->bin = PyMem_Malloc(SHARED_TRASH_INITIAL_CAPACITY * sizeof(TrashItem));
   if (!shared->bin) {
     PyMem_Free(shared);
     Py_DECREF(res);
@@ -3262,7 +3262,7 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
   // PyMutex)
   memset(&shared->lock, 0, sizeof(PyMutex));
   shared->count = 0;
-  shared->capacity = 4096;
+  shared->capacity = SHARED_TRASH_INITIAL_CAPACITY;
   shared->ref_count = 1; // 1 ref held by the Context itself
   res->trash_shared = shared;
 
@@ -3295,18 +3295,18 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
 
   // --- Fill Limits ---
   res->module_state->limits.max_uniform_buffer_bindings =
-      get_limit(GL_MAX_UNIFORM_BUFFER_BINDINGS, 8, MAX_BUFFER_BINDINGS);
+      get_limit(GL_MAX_UNIFORM_BUFFER_BINDINGS, MIN_BUFFER_BINDINGS, MAX_BUFFER_BINDINGS);
   res->module_state->limits.max_uniform_block_size =
-      get_limit(GL_MAX_UNIFORM_BLOCK_SIZE, 0x4000, 0x40000000);
+      get_limit(GL_MAX_UNIFORM_BLOCK_SIZE, GL_MIN_UBO_SIZE, GL_MAX_UBO_SIZE);
   res->module_state->limits.max_combined_uniform_blocks =
-      get_limit(GL_MAX_COMBINED_UNIFORM_BLOCKS, 8, MAX_BUFFER_BINDINGS);
+      get_limit(GL_MAX_COMBINED_UNIFORM_BLOCKS, GL_MIN_UNIFORM_BUFFER_BINDINGS, MAX_BUFFER_BINDINGS);
   res->module_state->limits.max_combined_texture_image_units =
-      get_limit(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, 8, MAX_SAMPLER_BINDINGS);
+      get_limit(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, GL_MIN_UNIFORM_BUFFER_BINDINGS, MAX_SAMPLER_BINDINGS);
   res->module_state->limits.max_vertex_attribs =
-      get_limit(GL_MAX_VERTEX_ATTRIBS, 8, 64);
+      get_limit(GL_MAX_VERTEX_ATTRIBS, GL_MIN_UNIFORM_BUFFER_BINDINGS, GL_ENGINE_MAX_VERTEX_ATTRIBS);
   res->module_state->limits.max_draw_buffers =
-      get_limit(GL_MAX_DRAW_BUFFERS, 8, 64);
-  res->module_state->limits.max_samples = get_limit(GL_MAX_SAMPLES, 1, 16);
+      get_limit(GL_MAX_DRAW_BUFFERS, GL_MIN_UNIFORM_BUFFER_BINDINGS, GL_ENGINE_MAX_VERTEX_ATTRIBS);
+  res->module_state->limits.max_samples = get_limit(GL_MAX_SAMPLES, HGL_MIN_SAMPLES, HGL_MAX_SAMPLES);
   res->module_state->limits.max_shader_storage_buffer_bindings =
       get_limit(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, 0, MAX_BUFFER_BINDINGS);
 
@@ -3327,7 +3327,7 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
   res->is_webgl = (raw_version && startswith(raw_version, "WebGL")) ? 1 : 0;
 
   PyObject *tmp = Py_BuildValue(
-      "{szszszszsisisisisisisi}", "vendor", raw_vendor ? raw_vendor : "Unknown",
+      CONTEXT_INFO_FORMAT, "vendor", raw_vendor ? raw_vendor : "Unknown",
       "renderer", raw_renderer ? raw_renderer : "Unknown", "version",
       raw_version ? raw_version : "Unknown", "glsl",
       raw_glsl ? raw_glsl : "Unknown", "max_uniform_buffer_bindings",
@@ -3349,8 +3349,9 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
   int max_texture_image_units =
       get_limit(GL_MAX_TEXTURE_IMAGE_UNITS, 8, MAX_SAMPLER_BINDINGS + 1);
   res->default_texture_unit = GL_TEXTURE0 + (max_texture_image_units - 1);
-  if (res->default_texture_unit < 1)
+  if (res->default_texture_unit < 1) {
     res->default_texture_unit = 1;
+  }
 
   Py_XSETREF(module_state->default_context, Py_NewRef((PyObject *)res));
   Py_DECREF(default_framebuffer);
@@ -3429,10 +3430,17 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args,
     }
   }
 
-  int target = storage ? GL_SHADER_STORAGE_BUFFER
-                       : (uniform ? GL_UNIFORM_BUFFER
-                          : index ? GL_ELEMENT_ARRAY_BUFFER
-                                  : GL_ARRAY_BUFFER);
+  int target;
+
+  if (storage) {
+      target = GL_SHADER_STORAGE_BUFFER;
+  } else if (uniform) {
+      target = GL_UNIFORM_BUFFER;
+  } else if (index) {
+      target = GL_ELEMENT_ARRAY_BUFFER;
+  } else {
+      target = GL_ARRAY_BUFFER;
+  }
 
   // We process the memoryview here to avoid doing it inside the lock.
   void *initial_data_ptr = NULL;
@@ -3992,8 +4000,23 @@ static int Image_write_internal(const Image *self, PyObject *data) {
     return -1;
   }
 
+  enum {
+    CUBEMAP_LAYER_COUNT = 6,
+    SINGLE_LAYER_COUNT = 1,
+  };
+
+
   int bpp = self->fmt.pixel_size;
-  Py_ssize_t layers = self->cubemap ? 6 : (self->array ? self->array : 1);
+  Py_ssize_t layers;
+
+  if (self->cubemap) {
+      layers = CUBEMAP_LAYER_COUNT;
+  } else if (self->array) {
+      layers = self->array;
+  } else {
+      layers = SINGLE_LAYER_COUNT;
+  }
+
   Py_ssize_t expected_size =
       (Py_ssize_t)self->width * self->height * bpp * layers;
 
@@ -4065,8 +4088,13 @@ static Image *Context_meth_image(Context *self, PyObject *args,
                              "array",    "levels", "texture", "cubemap",
                              "external", NULL};
 
-  int width, height, samples = 1, array = 0, cubemap = 0, levels = 1,
-                     external = 0;
+  int width;
+  int height;
+  int samples = 1;
+  int array = 0;
+  int cubemap = 0;
+  int levels = 1;
+  int external = 0;
   PyObject *format = state->str_rgba8unorm;
   PyObject *data = Py_None;
   PyObject *texture = Py_None;
@@ -4115,9 +4143,16 @@ static Image *Context_meth_image(Context *self, PyObject *args,
   }
 
   char renderbuffer = (samples > 1 || texture == Py_False) ? 1 : 0;
-  int target = cubemap ? GL_TEXTURE_CUBE_MAP
-               : array ? GL_TEXTURE_2D_ARRAY
-                       : GL_TEXTURE_2D;
+  int target;
+
+  if (cubemap) {
+      target = GL_TEXTURE_CUBE_MAP;
+  } else if (array) {
+      target = GL_TEXTURE_2D_ARRAY;
+  } else {
+      target = GL_TEXTURE_2D;
+  }
+
   if (samples > self->module_state->limits.max_samples) {
     samples = self->module_state->limits.max_samples;
   }
@@ -5054,9 +5089,21 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
   res->params.vertex_count = vertex_count;
   res->params.instance_count = instance_count;
   res->params.first_vertex = first_vertex;
-  res->index_type = (index_buffer != Py_None)
-                        ? (short_index ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT)
-                        : 0;
+  if (index_buffer == Py_None) {
+      res->index_type = INDEX_TYPE_NONE;
+  #ifdef DEBUG
+      if (short_index) {
+          fprintf(stderr,
+              "[HyperGL] short_index set without index buffer\n");
+          abort();
+      }
+  #endif
+  } else {
+      res->index_type = short_index
+          ? GL_UNSIGNED_SHORT
+          : GL_UNSIGNED_INT;
+  }
+
   res->index_size = short_index ? 2 : 4;
 
   // 6. MemoryViews
@@ -6365,18 +6412,18 @@ static PyObject *meth_camera(PyObject *self, PyObject *args, PyObject *kwargs) {
   vec3 eye;
   vec3 target = {0.0, 0.0, 0.0};
   vec3 up = {0.0, 0.0, 1.0};
-  double fov = 60.0;
-  double aspect = 1.0;
-  double znear = 0.1;
-  double zfar = 1000.0;
-  double size = 1.0;
-  int clip = 0;
+  double fov    = 60.0;    // degrees
+  double aspect= 1.0;     // square viewport
+  double znear = 0.1;     // typical depth precision lower bound
+  double zfar  = 1000.0;  // sane default scene scale
+  double size  = 1.0;     // orthographic scale
+  int clip     = 0;       // clipping disabled by default
 
   int args_ok = PyArg_ParseTupleAndKeywords(
       args, kwargs, "(ddd)|(ddd)(ddd)dddddp", keywords, &eye.x, &eye.y, &eye.z,
       &target.x, &target.y, &target.z, &up.x, &up.y, &up.z, &fov, &aspect,
       &znear, &zfar, &size, &clip);
-
+  
   if (!args_ok) {
     return NULL;
   }

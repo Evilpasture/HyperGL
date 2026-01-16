@@ -104,6 +104,7 @@
 #define HYPERGL_VERSION "0.0.0"
 #endif
 #define MAX_ATTACHMENTS 8
+#define MIN_BUFFER_BINDINGS 8
 #define MAX_BUFFER_BINDINGS 8
 #define MAX_SAMPLER_BINDINGS 16
 
@@ -710,6 +711,13 @@ typedef struct {
 #define GL_PARAMETER_BUFFER_ARB 0x80EE 
 #define GL_COMMAND_BARRIER_BIT 0x00000040
 
+#define GL_MIN_UNIFORM_BUFFER_BINDINGS 8
+#define GL_ENGINE_MAX_VERTEX_ATTRIBS 64
+#define GL_MIN_UBO_SIZE 0x4000
+#define GL_MAX_UBO_SIZE 0x40000000
+#define HGL_MIN_SAMPLES 1
+#define HGL_MAX_SAMPLES 16
+
 #ifndef GLboolean
 typedef unsigned char GLboolean;
 #endif
@@ -808,5 +816,14 @@ typedef enum ImageFormatTupleIndex {
     IF_CLEAR_TYPE,
     IF_TUPLE_SIZE
 } ImageFormatTupleIndex;
+
+// MISC defs
+
+#define SHARED_TRASH_INITIAL_CAPACITY 4096
+
+#define CONTEXT_INFO_FORMAT "{szszszszsisisisisisisi}"
+
+#define INDEX_TYPE_NONE 0
+
 
 #endif // HYPERGL_DEFS_H
