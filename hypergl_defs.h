@@ -756,7 +756,7 @@ typedef int  GLsizei;
 #define GL_NO_ERROR 0
 
 // -----------------------------------------------------------------------------
-// Uniform Binding Helpers & Dispatch Table
+// Enum helpers
 // -----------------------------------------------------------------------------
 
 typedef void (*UniformUploadFn)(GLint location, GLsizei count, const void *ptr);
@@ -794,5 +794,18 @@ typedef enum UniformFunction {
 
     UF_COUNT
 } UniformFunction;
+
+typedef enum ImageFormatTupleIndex {
+    IF_INTERNAL_FORMAT = 0,
+    IF_FORMAT,
+    IF_TYPE,
+    IF_BUFFER,
+    IF_COMPONENTS,
+    IF_PIXEL_SIZE,
+    IF_COLOR,
+    IF_FLAGS,
+    IF_CLEAR_TYPE,
+    IF_TUPLE_SIZE
+} ImageFormatTupleIndex;
 
 #endif // HYPERGL_DEFS_H

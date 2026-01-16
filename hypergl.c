@@ -794,36 +794,34 @@ static int get_image_format(const ModuleState *state, PyObject *helper,
   FETCH_HELPER_DICT(state, helper, IMAGE_FORMAT, lookup);
 
   PyObject *tup = PyDict_GetItem(lookup, name);
-  if (!tup || !PyTuple_Check(tup) || PyTuple_Size(tup) < 9) {
+  if (!tup || !PyTuple_Check(tup) || PyTuple_Size(tup) < IF_TUPLE_SIZE) {
     goto fail;
   }
 
-  PyObject *items[9];
-  for (int i = 0; i < 9; i++) {
-    items[i] = PyTuple_GetItem(tup, i);
-    if (!items[i]) {
-      goto fail;
-    }
-  }
+#define TUP(i) PyTuple_GetItem(tup, (i))
 
-  res->internal_format = to_int(items[0]);
-  res->format = to_int(items[1]);
-  res->type = to_int(items[2]);
-  res->buffer = to_int(items[3]);
-  res->components = to_int(items[4]);
-  res->pixel_size = to_int(items[5]);
-  res->color = to_int(items[6]);
-  res->flags = to_int(items[7]);
+  res->internal_format = to_int(TUP(IF_INTERNAL_FORMAT));
+  res->format          = to_int(TUP(IF_FORMAT));
+  res->type            = to_int(TUP(IF_TYPE));
+  res->buffer          = to_int(TUP(IF_BUFFER));
+  res->components      = to_int(TUP(IF_COMPONENTS));
+  res->pixel_size      = to_int(TUP(IF_PIXEL_SIZE));
+  res->color           = to_int(TUP(IF_COLOR));
+  res->flags           = to_int(TUP(IF_FLAGS));
 
   res->clear_type = '\0';
-  if (PyUnicode_Check(items[8])) {
+  PyObject *ct = TUP(IF_CLEAR_TYPE);
+  
+  if (ct && PyUnicode_Check(ct)) {
     Py_ssize_t size;
-    const char *str = PyUnicode_AsUTF8AndSize(items[8], &size);
+    const char *str = PyUnicode_AsUTF8AndSize(ct, &size);
     if (!str) {
       goto fail;
     }
     res->clear_type = (size > 0) ? str[0] : '\0';
   }
+
+#undef TUP
 
   Py_DECREF(lookup);
   return 1;
