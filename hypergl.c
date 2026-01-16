@@ -426,10 +426,18 @@ static void u_3iv(GLint l, GLsizei c, const void *p) { glUniform3iv(l, c, p); }
 static void u_4iv(GLint l, GLsizei c, const void *p) { glUniform4iv(l, c, p); }
 
 // Unsigned Integers
-static void u_1uiv(GLint l, GLsizei c, const void *p) { glUniform1uiv(l, c, p); }
-static void u_2uiv(GLint l, GLsizei c, const void *p) { glUniform2uiv(l, c, p); }
-static void u_3uiv(GLint l, GLsizei c, const void *p) { glUniform3uiv(l, c, p); }
-static void u_4uiv(GLint l, GLsizei c, const void *p) { glUniform4uiv(l, c, p); }
+static void u_1uiv(GLint l, GLsizei c, const void *p) {
+  glUniform1uiv(l, c, p);
+}
+static void u_2uiv(GLint l, GLsizei c, const void *p) {
+  glUniform2uiv(l, c, p);
+}
+static void u_3uiv(GLint l, GLsizei c, const void *p) {
+  glUniform3uiv(l, c, p);
+}
+static void u_4uiv(GLint l, GLsizei c, const void *p) {
+  glUniform4uiv(l, c, p);
+}
 
 // Floats
 static void u_1fv(GLint l, GLsizei c, const void *p) { glUniform1fv(l, c, p); }
@@ -439,35 +447,54 @@ static void u_4fv(GLint l, GLsizei c, const void *p) { glUniform4fv(l, c, p); }
 
 // Matrices (Always Transpose = GL_FALSE)
 // GLSL uses column-major matrices; transpose must be GL_FALSE per spec
-static void u_mat2(GLint l, GLsizei c, const void *p)   { glUniformMatrix2fv(l, c, GL_FALSE, p); }
-static void u_mat2x3(GLint l, GLsizei c, const void *p) { glUniformMatrix2x3fv(l, c, GL_FALSE, p); }
-static void u_mat2x4(GLint l, GLsizei c, const void *p) { glUniformMatrix2x4fv(l, c, GL_FALSE, p); }
-static void u_mat3x2(GLint l, GLsizei c, const void *p) { glUniformMatrix3x2fv(l, c, GL_FALSE, p); }
-static void u_mat3(GLint l, GLsizei c, const void *p)   { glUniformMatrix3fv(l, c, GL_FALSE, p); }
-static void u_mat3x4(GLint l, GLsizei c, const void *p) { glUniformMatrix3x4fv(l, c, GL_FALSE, p); }
-static void u_mat4x2(GLint l, GLsizei c, const void *p) { glUniformMatrix4x2fv(l, c, GL_FALSE, p); }
-static void u_mat4x3(GLint l, GLsizei c, const void *p) { glUniformMatrix4x3fv(l, c, GL_FALSE, p); }
-static void u_mat4(GLint l, GLsizei c, const void *p)   { glUniformMatrix4fv(l, c, GL_FALSE, p); }
+static void u_mat2(GLint l, GLsizei c, const void *p) {
+  glUniformMatrix2fv(l, c, GL_FALSE, p);
+}
+static void u_mat2x3(GLint l, GLsizei c, const void *p) {
+  glUniformMatrix2x3fv(l, c, GL_FALSE, p);
+}
+static void u_mat2x4(GLint l, GLsizei c, const void *p) {
+  glUniformMatrix2x4fv(l, c, GL_FALSE, p);
+}
+static void u_mat3x2(GLint l, GLsizei c, const void *p) {
+  glUniformMatrix3x2fv(l, c, GL_FALSE, p);
+}
+static void u_mat3(GLint l, GLsizei c, const void *p) {
+  glUniformMatrix3fv(l, c, GL_FALSE, p);
+}
+static void u_mat3x4(GLint l, GLsizei c, const void *p) {
+  glUniformMatrix3x4fv(l, c, GL_FALSE, p);
+}
+static void u_mat4x2(GLint l, GLsizei c, const void *p) {
+  glUniformMatrix4x2fv(l, c, GL_FALSE, p);
+}
+static void u_mat4x3(GLint l, GLsizei c, const void *p) {
+  glUniformMatrix4x3fv(l, c, GL_FALSE, p);
+}
+static void u_mat4(GLint l, GLsizei c, const void *p) {
+  glUniformMatrix4fv(l, c, GL_FALSE, p);
+}
 
 // -- Dispatch Table --
 
 static const UniformUploadFn uniform_upload_table[UF_COUNT] = {
-    [UF_1I] = u_1iv,   [UF_2I] = u_2iv,   [UF_3I] = u_3iv,   [UF_4I] = u_4iv,
-    [UF_1B] = u_1iv,   [UF_2B] = u_2iv,   [UF_3B] = u_3iv,   [UF_4B] = u_4iv,
+    [UF_1I] = u_1iv,        [UF_2I] = u_2iv,        [UF_3I] = u_3iv,
+    [UF_4I] = u_4iv,        [UF_1B] = u_1iv,        [UF_2B] = u_2iv,
+    [UF_3B] = u_3iv,        [UF_4B] = u_4iv,
 
-    [UF_1U] = u_1uiv,  [UF_2U] = u_2uiv,  [UF_3U] = u_3uiv,  [UF_4U] = u_4uiv,
-    [UF_1F] = u_1fv,   [UF_2F] = u_2fv,   [UF_3F] = u_3fv,   [UF_4F] = u_4fv,
+    [UF_1U] = u_1uiv,       [UF_2U] = u_2uiv,       [UF_3U] = u_3uiv,
+    [UF_4U] = u_4uiv,       [UF_1F] = u_1fv,        [UF_2F] = u_2fv,
+    [UF_3F] = u_3fv,        [UF_4F] = u_4fv,
 
-    [UF_MAT2]   = u_mat2,   [UF_MAT2x3] = u_mat2x3, [UF_MAT2x4] = u_mat2x4,
-    [UF_MAT3x2] = u_mat3x2, [UF_MAT3]   = u_mat3,   [UF_MAT3x4] = u_mat3x4,
-    [UF_MAT4x2] = u_mat4x2, [UF_MAT4x3] = u_mat4x3, [UF_MAT4]   = u_mat4,
+    [UF_MAT2] = u_mat2,     [UF_MAT2x3] = u_mat2x3, [UF_MAT2x4] = u_mat2x4,
+    [UF_MAT3x2] = u_mat3x2, [UF_MAT3] = u_mat3,     [UF_MAT3x4] = u_mat3x4,
+    [UF_MAT4x2] = u_mat4x2, [UF_MAT4x3] = u_mat4x3, [UF_MAT4] = u_mat4,
 };
 
 // Ensure the table covers all enum values at compile time
-_Static_assert(
-    sizeof(uniform_upload_table) / sizeof(uniform_upload_table[0]) == UF_COUNT,
-    "uniform_upload_table must match UniformFunction enum"
-);
+_Static_assert(sizeof(uniform_upload_table) / sizeof(uniform_upload_table[0]) ==
+                   UF_COUNT,
+               "uniform_upload_table must match UniformFunction enum");
 
 static void bind_uniforms(const Pipeline *self) {
   const UniformHeader *const header =
@@ -478,22 +505,14 @@ static void bind_uniforms(const Pipeline *self) {
     const UniformFunction func = (UniformFunction)header->binding[i].function;
     const void *ptr = data + header->binding[i].offset;
 
-    if (LIKELY(
-        func >= 0 && 
-        func < UF_COUNT && 
-        uniform_upload_table[func] != NULL
-    )) {
-      uniform_upload_table[func](
-          (GLint)header->binding[i].location,
-          (GLsizei)header->binding[i].count,
-          ptr
-      );
+    if (LIKELY(func >= 0 && func < UF_COUNT &&
+               uniform_upload_table[func] != NULL)) {
+      uniform_upload_table[func]((GLint)header->binding[i].location,
+                                 (GLsizei)header->binding[i].count, ptr);
     } else {
 #ifdef DEBUG
-      fprintf(stderr,
-          "[HyperGL] Invalid or unbound uniform function: %d\n",
-          func
-      );
+      fprintf(stderr, "[HyperGL] Invalid or unbound uniform function: %d\n",
+              func);
       abort();
 #endif
     }
@@ -801,17 +820,17 @@ static int get_image_format(const ModuleState *state, PyObject *helper,
 #define TUP(i) PyTuple_GetItem(tup, (i))
 
   res->internal_format = to_int(TUP(IF_INTERNAL_FORMAT));
-  res->format          = to_int(TUP(IF_FORMAT));
-  res->type            = to_int(TUP(IF_TYPE));
-  res->buffer          = to_int(TUP(IF_BUFFER));
-  res->components      = to_int(TUP(IF_COMPONENTS));
-  res->pixel_size      = to_int(TUP(IF_PIXEL_SIZE));
-  res->color           = to_int(TUP(IF_COLOR));
-  res->flags           = to_int(TUP(IF_FLAGS));
+  res->format = to_int(TUP(IF_FORMAT));
+  res->type = to_int(TUP(IF_TYPE));
+  res->buffer = to_int(TUP(IF_BUFFER));
+  res->components = to_int(TUP(IF_COMPONENTS));
+  res->pixel_size = to_int(TUP(IF_PIXEL_SIZE));
+  res->color = to_int(TUP(IF_COLOR));
+  res->flags = to_int(TUP(IF_FLAGS));
 
   res->clear_type = '\0';
   PyObject *ct = TUP(IF_CLEAR_TYPE);
-  
+
   if (ct && PyUnicode_Check(ct)) {
     Py_ssize_t size;
     const char *str = PyUnicode_AsUTF8AndSize(ct, &size);
@@ -1403,8 +1422,9 @@ static DescriptorSetBuffers build_descriptor_set_buffers(const Context *self,
 
   for (int i = 0; i < length; i += 4) {
     int binding = to_int(PyTuple_GetItem(bindings, i + 0));
-    if (PyErr_Occurred())
+    if (PyErr_Occurred()) {
       goto error_cleanup;
+    }
 
     if (binding < 0 || binding >= MAX_BUFFER_BINDINGS) {
       PyErr_Format(
@@ -1436,8 +1456,9 @@ static DescriptorSetBuffers build_descriptor_set_buffers(const Context *self,
       goto error_cleanup;
     }
 
-    if (PyErr_Occurred())
+    if (PyErr_Occurred()) {
       goto error_cleanup;
+    }
 
     res.binding[binding].buffer = (Buffer *)new_ref(buf_obj);
     res.binding[binding].offset = offset;
@@ -1564,25 +1585,29 @@ static DescriptorSet *build_descriptor_set(Context *self, PyObject *bindings) {
 
   DescriptorSet *res =
       PyObject_New(DescriptorSet, self->module_state->DescriptorSet_type);
-  if (!res)
+  if (!res) {
     return NULL;
+  }
   zeromem(res, sizeof(*res));
 
   res->uniform_buffers =
       build_descriptor_set_buffers(self, PyTuple_GetItem(bindings, 0));
-  if (PyErr_Occurred())
+  if (PyErr_Occurred()) {
     goto error_cleanup;
+  }
 
   res->samplers =
       build_descriptor_set_samplers(self, PyTuple_GetItem(bindings, 1));
-  if (PyErr_Occurred())
+  if (PyErr_Occurred()) {
     goto error_cleanup;
+  }
 
   if (PyTuple_Size(bindings) > 2) {
     res->storage_buffers =
         build_descriptor_set_buffers(self, PyTuple_GetItem(bindings, 2));
-    if (PyErr_Occurred())
+    if (PyErr_Occurred()) {
       goto error_cleanup;
+    }
   } else {
     zeromem(&res->storage_buffers, sizeof(res->storage_buffers));
   }
@@ -1593,8 +1618,9 @@ static DescriptorSet *build_descriptor_set(Context *self, PyObject *bindings) {
   int result = PyDict_SetDefaultRef(self->descriptor_set_cache, bindings,
                                     (PyObject *)res, &existing);
 
-  if (result < 0)
+  if (result < 0) {
     goto error_cleanup;
+  }
 
   if (result > 0) {
     Py_DECREF(res);
@@ -2909,8 +2935,9 @@ static void enqueue_trash(SharedTrash *trash, int id, int type) {
 
 static void release_descriptor_set(Context *self, DescriptorSet *set,
                                    int is_locked) {
-  if (!set)
+  if (!set) {
     return;
+  }
 
   // Atomic Decrement for cache usage tracking
   if (Atomic_Decrement(&set->uses) > 0) {
@@ -2924,19 +2951,22 @@ static void release_descriptor_set(Context *self, DescriptorSet *set,
 
   for (int i = 0; i < set->samplers.binding_count; ++i) {
     GLObject *sampler = set->samplers.binding[i].sampler;
-    if (!sampler)
+    if (!sampler) {
       continue;
+    }
 
     Py_INCREF(sampler);
 
     if (Atomic_Decrement(&sampler->uses) == 0) {
       remove_dict_value(self->sampler_cache, (PyObject *)sampler);
       if (!self->is_lost && sampler->obj) {
-        if (!is_locked)
+        if (!is_locked) {
           PyMutex_Lock(&self->state_lock);
+        }
         glDeleteSamplers(1, (const unsigned int *)&sampler->obj);
-        if (!is_locked)
+        if (!is_locked) {
           PyMutex_Unlock(&self->state_lock);
+        }
         sampler->obj = 0;
       }
     }
@@ -2944,22 +2974,25 @@ static void release_descriptor_set(Context *self, DescriptorSet *set,
   }
 
   for (int i = 0; i < set->uniform_buffers.binding_count; ++i) {
-    if (set->uniform_buffers.binding[i].buffer)
+    if (set->uniform_buffers.binding[i].buffer) {
       kill_list[kill_count++] =
           (PyObject *)set->uniform_buffers.binding[i].buffer;
+    }
     set->uniform_buffers.binding[i].buffer = NULL;
   }
 
   for (int i = 0; i < set->storage_buffers.binding_count; ++i) {
-    if (set->storage_buffers.binding[i].buffer)
+    if (set->storage_buffers.binding[i].buffer) {
       kill_list[kill_count++] =
           (PyObject *)set->storage_buffers.binding[i].buffer;
+    }
     set->storage_buffers.binding[i].buffer = NULL;
   }
 
   for (int i = 0; i < set->samplers.binding_count; ++i) {
-    if (set->samplers.binding[i].image)
+    if (set->samplers.binding[i].image) {
       kill_list[kill_count++] = (PyObject *)set->samplers.binding[i].image;
+    }
 
     set->samplers.binding[i].sampler = NULL;
     set->samplers.binding[i].image = NULL;
@@ -2973,15 +3006,17 @@ static void release_descriptor_set(Context *self, DescriptorSet *set,
 
 static void release_global_settings(Context *self, GlobalSettings *settings,
                                     int is_locked) {
-  if (!settings)
+  if (!settings) {
     return;
+  }
 
   if (Atomic_Decrement(&settings->uses) != 0) {
     return;
   }
 
-  if (!is_locked)
+  if (!is_locked) {
     PyMutex_Lock(&self->state_lock);
+  }
 
   if (Atomic_Load(&settings->uses) == 0) {
     remove_dict_value(self->global_settings_cache, (PyObject *)settings);
@@ -2990,19 +3025,23 @@ static void release_global_settings(Context *self, GlobalSettings *settings,
     }
   }
 
-  if (!is_locked)
+  if (!is_locked) {
     PyMutex_Unlock(&self->state_lock);
+  }
 
-  if (is_locked)
+  if (is_locked) {
     PyMutex_Unlock(&self->state_lock);
+  }
   Py_DECREF(settings);
-  if (is_locked)
+  if (is_locked) {
     PyMutex_Lock(&self->state_lock);
+  }
 }
 
 static void release_framebuffer(Context *self, GLObject *framebuffer) {
-  if (!framebuffer)
+  if (!framebuffer) {
     return;
+  }
 
   if (Atomic_Decrement(&framebuffer->uses) == 0) {
     remove_dict_value(self->framebuffer_cache, (PyObject *)framebuffer);
@@ -3022,8 +3061,9 @@ static void release_framebuffer(Context *self, GLObject *framebuffer) {
 }
 
 static void release_program(Context *self, GLObject *program) {
-  if (!program)
+  if (!program) {
     return;
+  }
 
   if (Atomic_Decrement(&program->uses) == 0) {
     remove_dict_value(self->program_cache, (PyObject *)program);
@@ -3037,8 +3077,9 @@ static void release_program(Context *self, GLObject *program) {
 }
 
 static void release_vertex_array(Context *self, GLObject *vertex_array) {
-  if (!vertex_array)
+  if (!vertex_array) {
     return;
+  }
 
   if (Atomic_Decrement(&vertex_array->uses) == 0) {
     remove_dict_value(self->vertex_array_cache, (PyObject *)vertex_array);
@@ -3211,8 +3252,9 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
 
   if (!res->descriptor_set_cache || !res->global_settings_cache ||
       !res->sampler_cache || !res->vertex_array_cache || !res->program_cache ||
-      !res->shader_cache || !res->includes || !res->framebuffer_cache)
+      !res->shader_cache || !res->includes || !res->framebuffer_cache) {
     goto fail;
+  }
 
   Py_INCREF(default_framebuffer);
   res->default_framebuffer = default_framebuffer;
@@ -3273,8 +3315,9 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
       "max_vertex_attribs", res->module_state->limits.max_vertex_attribs,
       "max_draw_buffers", res->module_state->limits.max_draw_buffers,
       "max_samples", res->module_state->limits.max_samples);
-  if (!tmp)
+  if (!tmp) {
     goto fail;
+  }
   res->info_dict = tmp;
 
   int max_texture_image_units =
@@ -3373,8 +3416,9 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args,
   if (data != Py_None) {
     // Get contiguous memoryview (Returns New Reference)
     data = PyMemoryView_GetContiguous(data, PyBUF_READ, 'C');
-    if (!data)
+    if (!data) {
       return NULL;
+    }
 
     if (PyObject_GetBuffer(data, &view, PyBUF_SIMPLE) < 0) {
       Py_DECREF(data);
@@ -3480,8 +3524,9 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args,
 
 static PyObject *Buffer_meth_bind(const Buffer *self, PyObject *args) {
   int unit;
-  if (!PyArg_ParseTuple(args, "i", &unit))
+  if (!PyArg_ParseTuple(args, "i", &unit)) {
     return NULL;
+  }
 
   VALIDATE(unit >= 0 && unit < self->ctx->module_state->limits
                                    .max_shader_storage_buffer_bindings,
@@ -3560,8 +3605,9 @@ static PyObject *Buffer_meth_map(Buffer *self, PyObject *args) {
   }
 
   Py_buffer view;
-  if (Buffer_getbuffer(self, &view, PyBUF_WRITE) < 0)
+  if (Buffer_getbuffer(self, &view, PyBUF_WRITE) < 0) {
     return NULL;
+  }
 
   PyObject *mv = PyMemoryView_FromBuffer(&view);
   if (!mv) {
@@ -3621,8 +3667,9 @@ static PyObject *Buffer_meth_write_texture_handle(const Buffer *self,
   int offset;
 
   if (!PyArg_ParseTupleAndKeywords(args, kwargs, "iO", keywords, &offset,
-                                   &image_obj))
+                                   &image_obj)) {
     return NULL;
+  }
 
   if (!PyObject_TypeCheck(image_obj, self->ctx->module_state->Image_type)) {
     PyErr_SetString(PyExc_TypeError,
@@ -3717,8 +3764,9 @@ static PyObject *Buffer_meth_write(const Buffer *self, PyObject *args,
   }
 
   PyObject *mem = PyMemoryView_GetContiguous(data, PyBUF_READ, 'C');
-  if (!mem)
+  if (!mem) {
     return NULL;
+  }
 
   Py_buffer view;
   if (PyObject_GetBuffer(mem, &view, PyBUF_SIMPLE)) {
@@ -4006,8 +4054,9 @@ static Image *Context_meth_image(Context *self, PyObject *args,
 
   // --- Validation Logic ---
   int max_levels = count_mipmaps(width, height);
-  if (levels <= 0)
+  if (levels <= 0) {
     levels = max_levels;
+  }
   if (self->is_lost) {
     PyErr_SetString(PyExc_RuntimeError, "[HyperGL] context lost");
     return NULL;
@@ -4043,8 +4092,9 @@ static Image *Context_meth_image(Context *self, PyObject *args,
   int target = cubemap ? GL_TEXTURE_CUBE_MAP
                : array ? GL_TEXTURE_2D_ARRAY
                        : GL_TEXTURE_2D;
-  if (samples > self->module_state->limits.max_samples)
+  if (samples > self->module_state->limits.max_samples) {
     samples = self->module_state->limits.max_samples;
+  }
 
   ImageFormat fmt;
   if (!get_image_format(state, state->helper, format, &fmt)) {
@@ -4074,10 +4124,11 @@ static Image *Context_meth_image(Context *self, PyObject *args,
       int w = least_one(width >> level);
       int h = least_one(height >> level);
       if (cubemap) {
-        for (int i = 0; i < 6; ++i)
+        for (int i = 0; i < 6; ++i) {
           glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, level,
                        fmt.internal_format, w, h, 0, fmt.format, fmt.type,
                        NULL);
+        }
       } else if (array) {
         glTexImage3D(target, level, fmt.internal_format, w, h, array, 0,
                      fmt.format, fmt.type, NULL);
@@ -4201,8 +4252,9 @@ static PyObject *Image_meth_make_resident(Image *self, PyObject *args) {
   }
 
   int resident = 1; // Default True
-  if (!PyArg_ParseTuple(args, "|p", &resident))
+  if (!PyArg_ParseTuple(args, "|p", &resident)) {
     return NULL;
+  }
 
   if (self->bindless_handle == 0) {
     PyErr_SetString(
@@ -4214,18 +4266,20 @@ static PyObject *Image_meth_make_resident(Image *self, PyObject *args) {
   PyMutex_Lock(&self->ctx->state_lock);
   if (resident && !self->is_resident) {
     glMakeTextureHandleResidentARB(self->bindless_handle);
-    if (glGetError() == GL_NO_ERROR)
+    if (glGetError() == GL_NO_ERROR) {
       self->is_resident = 1;
-    else
+    } else {
       PyErr_SetString(PyExc_RuntimeError,
                       "[HyperGL] Failed to make texture handle resident");
+    }
   } else if (!resident && self->is_resident) {
     glMakeTextureHandleNonResidentARB(self->bindless_handle);
-    if (glGetError() == GL_NO_ERROR)
+    if (glGetError() == GL_NO_ERROR) {
       self->is_resident = 0;
-    else
+    } else {
       PyErr_SetString(PyExc_RuntimeError,
                       "[HyperGL] Failed to make texture handle non-resident");
+    }
   }
   PyMutex_Unlock(&self->ctx->state_lock);
 
@@ -4243,8 +4297,9 @@ static PyObject *Image_meth_clear(const Image *self, PyObject *args) {
   // Get all FBO IDs into a stack-allocated or temporary C array.
   // This happens while we still own the GIL/Thread State.
   int *fbo_ids = (int *)PyMem_Malloc(count * sizeof(int));
-  if (!fbo_ids)
+  if (!fbo_ids) {
     return PyErr_NoMemory();
+  }
 
   for (int i = 0; i < count; ++i) {
     ImageFace *face = (ImageFace *)PyTuple_GetItem(self->layers, i);
@@ -4324,8 +4379,9 @@ static PyObject *Image_meth_write(const Image *self, PyObject *args,
   }
 
   int expected_size = size.x * size.y * self->fmt.pixel_size;
-  if (layer_arg == Py_None)
+  if (layer_arg == Py_None) {
     expected_size *= self->layer_count;
+  }
 
   BufferView *buffer_view = NULL;
   Py_buffer view = {0};
@@ -4361,8 +4417,9 @@ static PyObject *Image_meth_write(const Image *self, PyObject *args,
   void *pixels =
       buffer_view ? (unsigned char *)NULL + buffer_view->offset : view.buf;
 
-  if (buffer_view)
+  if (buffer_view) {
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, buffer_view->buffer->buffer);
+  }
 
   if (self->cubemap) {
     int stride = size.x * size.y * self->fmt.pixel_size;
@@ -4387,8 +4444,9 @@ static PyObject *Image_meth_write(const Image *self, PyObject *args,
                     self->fmt.format, self->fmt.type, pixels);
   }
 
-  if (buffer_view)
+  if (buffer_view) {
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+  }
 
   PyMutex_Unlock(&self->ctx->state_lock);
 
@@ -4722,14 +4780,16 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
       return NULL;
     }
     create_kwargs = PyDict_Copy(template->create_kwargs);
-    if (!create_kwargs)
+    if (!create_kwargs) {
       goto fail;
+    }
     PyDict_Update(create_kwargs, kwargs);
     PyDict_DelItemString(create_kwargs, "template");
   } else {
     create_kwargs = PyDict_Copy(kwargs);
-    if (!create_kwargs)
+    if (!create_kwargs) {
       goto fail;
+    }
   }
 
   if (!PyArg_ParseTupleAndKeywords(
@@ -4753,13 +4813,15 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
   }
 
   Viewport viewport_value;
-  if (!to_viewport(&viewport_value, viewport, 0, 0, 0, 0))
+  if (!to_viewport(&viewport_value, viewport, 0, 0, 0, 0)) {
     goto fail;
+  }
 
   int topology;
   if (!get_topology(self->module_state, self->module_state->helper,
-                    topology_arg, &topology))
+                    topology_arg, &topology)) {
     goto fail;
+  }
 
   // 4. Logic & Creation
   if (template) {
@@ -4770,15 +4832,17 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
         compile_program(self, includes != Py_None ? includes : self->includes,
                         vertex_shader, fragment_shader, layout);
   }
-  if (!program)
+  if (!program) {
     goto fail;
+  }
 
   if (arg_uniforms != Py_None) {
     PyObject *tuple =
         PyObject_CallMethod(self->module_state->helper, "uniforms", "(OOO)",
                             program->extra, arg_uniforms, arg_uniform_data);
-    if (!tuple)
+    if (!tuple) {
       goto fail;
+    }
     // try not to break things here. these are borrowed refs.
     PyObject *item0 = PyTuple_GetItem(tuple, 0);
     PyObject *item1 = PyTuple_GetItem(tuple, 1);
@@ -4805,13 +4869,15 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
   validate = PyObject_CallMethod(self->module_state->helper, "validate",
                                  "(OOOOO)", program->extra, layout, resources,
                                  vertex_buffers, self->info_dict);
-  if (!validate)
+  if (!validate) {
     goto fail;
+  }
 
   layout_bindings = PyObject_CallMethod(self->module_state->helper,
                                         "layout_bindings", "(O)", layout);
-  if (!layout_bindings)
+  if (!layout_bindings) {
     goto fail;
+  }
   if (!PyList_Check(layout_bindings)) {
     PyErr_SetString(PyExc_TypeError,
                     "[HyperGL] layout_bindings must be a list");
@@ -4840,9 +4906,9 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
       }
 
       int location = glGetUniformLocation(program->obj, name_str);
-      if (location >= 0)
+      if (location >= 0) {
         glUniform1i(location, binding);
-      else {
+      } else {
         GLuint index = glGetUniformBlockIndex(program->obj, name_str);
         if (index != GL_INVALID_INDEX) {
           glUniformBlockBinding(program->obj, index, (GLuint)binding);
@@ -4856,8 +4922,9 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
   framebuffer_attachments =
       PyObject_CallMethod(self->module_state->helper, "framebuffer_attachments",
                           "(O)", framebuffer_arg);
-  if (!framebuffer_attachments)
+  if (!framebuffer_attachments) {
     goto fail;
+  }
 
   if (framebuffer_attachments != Py_None && viewport == Py_None) {
     PyObject *size = PyTuple_GetItem(framebuffer_attachments, 0);
@@ -4867,42 +4934,50 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
 
   // All GLObject builders must internally acquire ctx->state_lock
   framebuffer = build_framebuffer(self, framebuffer_attachments);
-  if (!framebuffer)
+  if (!framebuffer) {
     goto fail;
+  }
 
   vertex_array_bindings =
       PyObject_CallMethod(self->module_state->helper, "vertex_array_bindings",
                           "(OO)", vertex_buffers, index_buffer);
-  if (!vertex_array_bindings)
+  if (!vertex_array_bindings) {
     goto fail;
+  }
 
   vertex_array = build_vertex_array(self, vertex_array_bindings);
-  if (!vertex_array)
+  if (!vertex_array) {
     goto fail;
+  }
 
   resource_bindings = PyObject_CallMethod(
       self->module_state->helper, "resource_bindings", "(O)", resources);
-  if (!resource_bindings)
+  if (!resource_bindings) {
     goto fail;
+  }
 
   descriptor_set = build_descriptor_set(self, resource_bindings);
-  if (!descriptor_set)
+  if (!descriptor_set) {
     goto fail;
+  }
 
   settings = PyObject_CallMethod(self->module_state->helper, "settings",
                                  "(OOOOO)", cull_face, depth, stencil, blend,
                                  framebuffer_attachments);
-  if (!settings)
+  if (!settings) {
     goto fail;
+  }
 
   global_settings = build_global_settings(self, settings);
-  if (!global_settings)
+  if (!global_settings) {
     goto fail;
+  }
 
   // 5. Allocation
   res = PyObject_GC_New(Pipeline, self->module_state->Pipeline_type);
-  if (!res)
+  if (!res) {
     goto fail;
+  }
 
   // Init pointers to NULL
   res->ctx = NULL;
@@ -5007,19 +5082,23 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
 
   // 7. Buffer Acquisition
   if (PyObject_GetBuffer(res->viewport_data, &res->viewport_data_buffer,
-                         PyBUF_SIMPLE) < 0)
+                         PyBUF_SIMPLE) < 0) {
     goto fail;
+  }
   if (PyObject_GetBuffer(res->render_data, &res->render_data_buffer,
-                         PyBUF_SIMPLE) < 0)
+                         PyBUF_SIMPLE) < 0) {
     goto fail;
+  }
 
   if (res->uniforms) {
     if (PyObject_GetBuffer(res->uniform_layout, &res->uniform_layout_buffer,
-                           PyBUF_SIMPLE) < 0)
+                           PyBUF_SIMPLE) < 0) {
       goto fail;
+    }
     if (PyObject_GetBuffer(res->uniform_data, &res->uniform_data_buffer,
-                           PyBUF_SIMPLE) < 0)
+                           PyBUF_SIMPLE) < 0) {
       goto fail;
+    }
   }
 
   PyObject_GC_Track(res);
@@ -5034,17 +5113,21 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
   return res;
 
 fail:
-  if (res && res->viewport_data_buffer.obj)
+  if (res && res->viewport_data_buffer.obj) {
     PyBuffer_Release(&res->viewport_data_buffer);
+  }
 
-  if (res && res->render_data_buffer.obj)
+  if (res && res->render_data_buffer.obj) {
     PyBuffer_Release(&res->render_data_buffer);
+  }
 
-  if (res && res->uniform_layout_buffer.obj)
+  if (res && res->uniform_layout_buffer.obj) {
     PyBuffer_Release(&res->uniform_layout_buffer);
+  }
 
-  if (res && res->uniform_data_buffer.obj)
+  if (res && res->uniform_data_buffer.obj) {
     PyBuffer_Release(&res->uniform_data_buffer);
+  }
 
   Py_XDECREF(create_kwargs);
   Py_XDECREF(program);
@@ -5052,14 +5135,18 @@ fail:
   Py_XDECREF(uniform_layout);
   Py_XDECREF(uniform_data);
   Py_XDECREF(template_obj);
-  if (framebuffer)
+  if (framebuffer) {
     Py_DECREF(framebuffer);
-  if (vertex_array)
+  }
+  if (vertex_array) {
     Py_DECREF(vertex_array);
-  if (descriptor_set)
+  }
+  if (descriptor_set) {
     Py_DECREF(descriptor_set);
-  if (global_settings)
+  }
+  if (global_settings) {
     Py_DECREF(global_settings);
+  }
 
   Py_XDECREF(validate);
   Py_XDECREF(layout_bindings);
@@ -5068,8 +5155,9 @@ fail:
   Py_XDECREF(resource_bindings);
   Py_XDECREF(settings);
 
-  if (res)
+  if (res) {
     Py_DECREF(res);
+  }
   return NULL;
 }
 
@@ -5214,18 +5302,24 @@ static PyObject *Pipeline_meth_render_indirect(const Pipeline *self,
 
   // 1. Bind State
   if (v1.x != v2.x || v1.y != v2.y || v1.width != v2.width ||
-      v1.height != v2.height)
+      v1.height != v2.height) {
     bind_viewport_internal(self->ctx, viewport);
-  if (self->ctx->current_global_settings != self->global_settings)
+  }
+  if (self->ctx->current_global_settings != self->global_settings) {
     bind_global_settings_internal(self->ctx, self->global_settings);
-  if (self->ctx->current_draw_framebuffer != self->framebuffer->obj)
+  }
+  if (self->ctx->current_draw_framebuffer != self->framebuffer->obj) {
     bind_draw_framebuffer_internal(self->ctx, self->framebuffer->obj);
-  if (self->ctx->current_program != self->program->obj)
+  }
+  if (self->ctx->current_program != self->program->obj) {
     bind_program_internal(self->ctx, self->program->obj);
-  if (self->ctx->current_vertex_array != self->vertex_array->obj)
+  }
+  if (self->ctx->current_vertex_array != self->vertex_array->obj) {
     bind_vertex_array_internal(self->ctx, self->vertex_array->obj);
-  if (self->ctx->current_descriptor_set != self->descriptor_set)
+  }
+  if (self->ctx->current_descriptor_set != self->descriptor_set) {
     bind_descriptor_set_internal(self->ctx, self->descriptor_set);
+  }
 
   if (self->uniforms) {
     bind_uniforms(self);
@@ -5353,8 +5447,9 @@ static Compute *Context_meth_compute(Context *self, PyObject *args,
   // --- Shader Processing ---
   if (PyUnicode_Check(compute_shader)) {
     shader_bytes = PyUnicode_AsUTF8String(compute_shader);
-    if (!shader_bytes)
+    if (!shader_bytes) {
       goto fail;
+    }
   } else if (PyBytes_Check(compute_shader)) {
     shader_bytes = compute_shader;
     Py_INCREF(shader_bytes);
@@ -5366,16 +5461,18 @@ static Compute *Context_meth_compute(Context *self, PyObject *args,
 
   program = compile_compute_program(self, NULL, shader_bytes);
   Py_CLEAR(shader_bytes);
-  if (!program)
+  if (!program) {
     goto fail;
+  }
 
   // --- Uniforms Processing ---
   if (uniforms_arg != Py_None) {
     tuple = PyObject_CallMethod(self->module_state->helper, "uniforms", "(OOO)",
                                 program->extra, uniforms_arg, uniform_data);
 
-    if (!tuple)
+    if (!tuple) {
       goto fail;
+    }
 
     PyObject *uniform_dict = PyTuple_GetItem(tuple, 0);
     if (!uniform_dict || !PyDict_Check(uniform_dict)) {
@@ -5385,8 +5482,9 @@ static Compute *Context_meth_compute(Context *self, PyObject *args,
     }
 
     uniforms_proxy = PyDictProxy_New(uniform_dict);
-    if (!uniforms_proxy)
+    if (!uniforms_proxy) {
       goto fail;
+    }
 
     uniform_layout = PyTuple_GetItem(tuple, 1);
     Py_XINCREF(uniform_layout);
@@ -5400,18 +5498,21 @@ static Compute *Context_meth_compute(Context *self, PyObject *args,
   // --- Resource Processing ---
   resource_bindings = PyObject_CallMethod(
       self->module_state->helper, "resource_bindings", "(O)", resources);
-  if (!resource_bindings)
+  if (!resource_bindings) {
     goto fail;
+  }
 
   descriptor_set = build_descriptor_set(self, resource_bindings);
   Py_CLEAR(resource_bindings);
-  if (!descriptor_set)
+  if (!descriptor_set) {
     goto fail;
+  }
 
   // --- Object Creation ---
   res = PyObject_New(Compute, self->module_state->Compute_type);
-  if (!res)
+  if (!res) {
     goto fail;
+  }
 
   res->ctx = self;
   res->program = program;
@@ -5440,11 +5541,13 @@ static Compute *Context_meth_compute(Context *self, PyObject *args,
   // --- Buffer Acquisition ---
   if (res->uniforms) {
     if (PyObject_GetBuffer(res->uniform_layout, &res->uniform_layout_buffer,
-                           PyBUF_SIMPLE))
+                           PyBUF_SIMPLE)) {
       goto fail;
+    }
     if (PyObject_GetBuffer(res->uniform_data, &res->uniform_data_buffer,
-                           PyBUF_SIMPLE))
+                           PyBUF_SIMPLE)) {
       goto fail;
+    }
   }
 
   return res;
@@ -5457,8 +5560,9 @@ fail:
   Py_XDECREF(tuple);
   Py_XDECREF(resource_bindings);
   Py_XDECREF(descriptor_set);
-  if (res)
+  if (res) {
     Py_DECREF(res);
+  }
 
   return NULL;
 }
@@ -5474,8 +5578,9 @@ static PyObject *Context_meth_pack_indirect(Context *self, PyObject *args,
   int indexed = 0;
 
   if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|p", keywords, &commands,
-                                   &indexed))
+                                   &indexed)) {
     return NULL;
+  }
 
   // OPTIMIZATION: Convert outer sequence to a fast array
   PyObject *fast_commands =
@@ -5545,43 +5650,53 @@ static PyObject *Context_meth_pack_indirect(Context *self, PyObject *args,
 
       // 1. count
       unsigned long long val = PyLong_AsUnsignedLongLong(cmd_items[0]);
-      if (val == (unsigned long long)-1 && PyErr_Occurred())
+      if (val == (unsigned long long)-1 && PyErr_Occurred()) {
         goto index_error;
-      if (val > UINT32_MAX)
+      }
+      if (val > UINT32_MAX) {
         goto range_error;
+      }
       out->count = (uint32_t)val;
 
       // 2. instanceCount
       val = PyLong_AsUnsignedLongLong(cmd_items[1]);
-      if (val == (unsigned long long)-1 && PyErr_Occurred())
+      if (val == (unsigned long long)-1 && PyErr_Occurred()) {
         goto index_error;
-      if (val > UINT32_MAX)
+      }
+      if (val > UINT32_MAX) {
         goto range_error;
+      }
       out->instanceCount = (uint32_t)val;
 
       // 3. firstIndex
       val = PyLong_AsUnsignedLongLong(cmd_items[2]);
-      if (val == (unsigned long long)-1 && PyErr_Occurred())
+      if (val == (unsigned long long)-1 && PyErr_Occurred()) {
         goto index_error;
-      if (val > UINT32_MAX)
+      }
+      if (val > UINT32_MAX) {
         goto range_error;
+      }
       out->firstIndex = (uint32_t)val;
 
       if (inputs == 5) {
         // 4. baseVertex (Signed)
         const long long sval = PyLong_AsLongLong(cmd_items[3]);
-        if (sval == -1 && PyErr_Occurred())
+        if (sval == -1 && PyErr_Occurred()) {
           goto index_error;
-        if (sval < INT32_MIN || sval > INT32_MAX)
+        }
+        if (sval < INT32_MIN || sval > INT32_MAX) {
           goto range_error;
+        }
         out->baseVertex = (int32_t)sval;
 
         // 5. baseInstance
         val = PyLong_AsUnsignedLongLong(cmd_items[4]);
-        if (val == (unsigned long long)-1 && PyErr_Occurred())
+        if (val == (unsigned long long)-1 && PyErr_Occurred()) {
           goto index_error;
-        if (val > UINT32_MAX)
+        }
+        if (val > UINT32_MAX) {
           goto range_error;
+        }
         out->baseInstance = (uint32_t)val;
       } else {
         // inputs == 4
@@ -5590,10 +5705,12 @@ static PyObject *Context_meth_pack_indirect(Context *self, PyObject *args,
 
         // 4. baseInstance (taken from item index 3)
         val = PyLong_AsUnsignedLongLong(cmd_items[3]);
-        if (val == (unsigned long long)-1 && PyErr_Occurred())
+        if (val == (unsigned long long)-1 && PyErr_Occurred()) {
           goto index_error;
-        if (val > UINT32_MAX)
+        }
+        if (val > UINT32_MAX) {
           goto range_error;
+        }
         out->baseInstance = (uint32_t)val;
       }
 
@@ -5617,34 +5734,42 @@ static PyObject *Context_meth_pack_indirect(Context *self, PyObject *args,
 
       // 1. count
       unsigned long long val = PyLong_AsUnsignedLongLong(cmd_items[0]);
-      if (val == (unsigned long long)-1 && PyErr_Occurred())
+      if (val == (unsigned long long)-1 && PyErr_Occurred()) {
         goto array_error;
-      if (val > UINT32_MAX)
+      }
+      if (val > UINT32_MAX) {
         goto range_error;
+      }
       out->count = (uint32_t)val;
 
       // 2. instanceCount
       val = PyLong_AsUnsignedLongLong(cmd_items[1]);
-      if (val == (unsigned long long)-1 && PyErr_Occurred())
+      if (val == (unsigned long long)-1 && PyErr_Occurred()) {
         goto array_error;
-      if (val > UINT32_MAX)
+      }
+      if (val > UINT32_MAX) {
         goto range_error;
+      }
       out->instanceCount = (uint32_t)val;
 
       // 3. first
       val = PyLong_AsUnsignedLongLong(cmd_items[2]);
-      if (val == (unsigned long long)-1 && PyErr_Occurred())
+      if (val == (unsigned long long)-1 && PyErr_Occurred()) {
         goto array_error;
-      if (val > UINT32_MAX)
+      }
+      if (val > UINT32_MAX) {
         goto range_error;
+      }
       out->first = (uint32_t)val;
 
       // 4. baseInstance
       val = PyLong_AsUnsignedLongLong(cmd_items[3]);
-      if (val == (unsigned long long)-1 && PyErr_Occurred())
+      if (val == (unsigned long long)-1 && PyErr_Occurred()) {
         goto array_error;
-      if (val > UINT32_MAX)
+      }
+      if (val > UINT32_MAX) {
         goto range_error;
+      }
       out->baseInstance = (uint32_t)val;
     }
 
@@ -5685,8 +5810,9 @@ static PyObject *Context_meth_new_frame(Context *self, PyObject *args,
   // Fast path: if no arguments are provided, skip expensive parsing
   if (PyTuple_GET_SIZE(args) > 0 || (kwargs && PyDict_Size(kwargs) > 0)) {
     if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|pp", keywords, &reset,
-                                     &clear))
+                                     &clear)) {
       return NULL;
+    }
   }
 
   if (self->is_lost) {
@@ -5780,8 +5906,9 @@ static PyObject *Context_meth_end_frame(Context *self, PyObject *args,
 
   if (PyTuple_GET_SIZE(args) > 0 || (kwargs && PyDict_Size(kwargs) > 0)) {
     if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|pp", keywords, &clean,
-                                     &flush))
+                                     &flush)) {
       return NULL;
+    }
   }
 
   if (self->is_lost) {
@@ -5798,12 +5925,15 @@ static PyObject *Context_meth_end_frame(Context *self, PyObject *args,
 
   if (clean) {
     // 1. Unbind GL Objects
-    if (self->current_draw_framebuffer != 0)
+    if (self->current_draw_framebuffer != 0) {
       bind_draw_framebuffer_internal(self, 0);
-    if (self->current_program != 0)
+    }
+    if (self->current_program != 0) {
       bind_program_internal(self, 0);
-    if (self->current_vertex_array != 0)
+    }
+    if (self->current_vertex_array != 0) {
       bind_vertex_array_internal(self, 0);
+    }
 
     // 2. Release Internal Resources
     if (self->current_descriptor_set) {
@@ -6181,8 +6311,9 @@ static CONST_FUNC FORCE_INLINE vec3 sub(const vec3 a, const vec3 b) {
 static CONST_FUNC FORCE_INLINE vec3 normalize(const vec3 a) {
   const double sql = (a.x * a.x) + (a.y * a.y) + (a.z * a.z);
   const double epsilon = 1e-30;
-  if (!(sql > epsilon)) // catches zero, tiny, negative, NaN
+  if (!(sql > epsilon)) { // catches zero, tiny, negative, NaN
     return (vec3){0, 0, 0};
+  }
 
   const double inv_l = 1.0 / sqrt(sql);
   return (vec3){a.x * inv_l, a.y * inv_l, a.z * inv_l};
@@ -6220,8 +6351,9 @@ static PyObject *meth_camera(PyObject *self, PyObject *args, PyObject *kwargs) {
       &target.x, &target.y, &target.z, &up.x, &up.y, &up.z, &fov, &aspect,
       &znear, &zfar, &size, &clip);
 
-  if (!args_ok)
+  if (!args_ok) {
     return NULL;
+  }
 
   const vec3 f = normalize(sub(target, eye));
   const vec3 s = normalize(cross(f, up));
@@ -6268,8 +6400,9 @@ static PyObject *meth_camera(PyObject *self, PyObject *args, PyObject *kwargs) {
 
 static void Context_dealloc(Context *self) {
   // 1. Untrack
-  if (PyObject_GC_IsTracked((PyObject *)self))
+  if (PyObject_GC_IsTracked((PyObject *)self)) {
     PyObject_GC_UnTrack(self);
+  }
 
   // 2. Clear Caches
   Context_clear(self);
@@ -6283,8 +6416,9 @@ static void Context_dealloc(Context *self) {
 
     // Decrement ref count; if 0, free the C memory
     if (Atomic_Decrement(&shared->ref_count) == 0) {
-      if (shared->bin)
+      if (shared->bin) {
         PyMem_Free(shared->bin);
+      }
       PyMem_Free(shared);
     }
     self->trash_shared = NULL;
@@ -6343,8 +6477,9 @@ static void Buffer_dealloc(Buffer *self) {
 // you need to ensure it is non-resident before deletion. It is good practice to
 // ensure it is non-resident.
 static void Image_dealloc(Image *self) {
-  if (PyObject_GC_IsTracked((PyObject *)self))
+  if (PyObject_GC_IsTracked((PyObject *)self)) {
     PyObject_GC_UnTrack(self);
+  }
 
   if (self->bindless_handle && self->is_resident && self->ctx &&
       !self->ctx->is_lost) {
@@ -6380,8 +6515,9 @@ static void Image_dealloc(Image *self) {
 
 static void Pipeline_dealloc(Pipeline *self) {
   Context *ctx = self->ctx;
-  if (PyObject_GC_IsTracked((PyObject *)self))
+  if (PyObject_GC_IsTracked((PyObject *)self)) {
     PyObject_GC_UnTrack(self);
+  }
   if (ctx) {
     release_program(ctx, self->program);
     release_framebuffer(ctx, self->framebuffer);
@@ -6405,8 +6541,9 @@ static void Compute_dealloc(Compute *self) {
 }
 
 static void ImageFace_dealloc(ImageFace *self) {
-  if (PyObject_GC_IsTracked((PyObject *)self))
+  if (PyObject_GC_IsTracked((PyObject *)self)) {
     PyObject_GC_UnTrack(self);
+  }
 
   ImageFace_clear(self);
   Py_TYPE(self)->tp_free((PyObject *)self);
@@ -6435,8 +6572,9 @@ static void DescriptorSet_dealloc(DescriptorSet *self) {
 static void GlobalSettings_dealloc(GlobalSettings *self) { PyObject_Del(self); }
 
 static void GLObject_dealloc(GLObject *self) {
-  if (PyObject_GC_IsTracked((PyObject *)self))
+  if (PyObject_GC_IsTracked((PyObject *)self)) {
     PyObject_GC_UnTrack(self);
+  }
 
   // Use SharedTrash
   if (Atomic_Decrement(&self->uses) == 0 && self->trash) {
@@ -6446,8 +6584,9 @@ static void GLObject_dealloc(GLObject *self) {
   // Release hold on trash mechanism
   if (self->trash) {
     if (Atomic_Decrement(&self->trash->ref_count) == 0) {
-      if (self->trash->bin)
+      if (self->trash->bin) {
         PyMem_Free(self->trash->bin);
+      }
       PyMem_Free(self->trash);
     }
   }
@@ -6487,7 +6626,8 @@ static PyGetSetDef Context_getset[] = {
 };
 
 static PyMemberDef Context_members[] = {
-    {"includes", Py_T_OBJECT_EX, offsetof(Context, includes), Py_READONLY, NULL},
+    {"includes", Py_T_OBJECT_EX, offsetof(Context, includes), Py_READONLY,
+     NULL},
     {"info", Py_T_OBJECT_EX, offsetof(Context, info_dict), Py_READONLY, NULL},
     {"lost", Py_T_BOOL, offsetof(Context, is_lost), 0, NULL},
     {0},
@@ -6535,7 +6675,8 @@ static PyMemberDef Image_members[] = {
     {"format", Py_T_OBJECT_EX, offsetof(Image, format), Py_READONLY, NULL},
     {"samples", Py_T_INT, offsetof(Image, samples), Py_READONLY, NULL},
     {"array", Py_T_INT, offsetof(Image, array), Py_READONLY, NULL},
-    {"renderbuffer", Py_T_BOOL, offsetof(Image, renderbuffer), Py_READONLY, NULL},
+    {"renderbuffer", Py_T_BOOL, offsetof(Image, renderbuffer), Py_READONLY,
+     NULL},
     {0},
 };
 
@@ -6553,20 +6694,24 @@ static PyGetSetDef Pipeline_getset[] = {
 };
 
 static PyMemberDef Pipeline_members[] = {
-    {"vertex_count", Py_T_INT, offsetof(Pipeline, params.vertex_count), 0, NULL},
+    {"vertex_count", Py_T_INT, offsetof(Pipeline, params.vertex_count), 0,
+     NULL},
     {"instance_count", Py_T_INT, offsetof(Pipeline, params.instance_count), 0,
      NULL},
-    {"first_vertex", Py_T_INT, offsetof(Pipeline, params.first_vertex), 0, NULL},
-    {"uniforms", Py_T_OBJECT_EX, offsetof(Pipeline, uniforms), Py_READONLY, NULL},
+    {"first_vertex", Py_T_INT, offsetof(Pipeline, params.first_vertex), 0,
+     NULL},
+    {"uniforms", Py_T_OBJECT_EX, offsetof(Pipeline, uniforms), Py_READONLY,
+     NULL},
     {0},
 };
 
 static PyMemberDef Compute_members[] = {
-    {"uniforms", Py_T_OBJECT_EX, offsetof(Compute, uniforms), Py_READONLY, "uniforms"},
-    {"uniform_layout", Py_T_OBJECT_EX, offsetof(Compute, uniform_layout), Py_READONLY,
-     "uniform_layout"},
-    {"uniform_data", Py_T_OBJECT_EX, offsetof(Compute, uniform_data), Py_READONLY,
-     "uniform_data"},
+    {"uniforms", Py_T_OBJECT_EX, offsetof(Compute, uniforms), Py_READONLY,
+     "uniforms"},
+    {"uniform_layout", Py_T_OBJECT_EX, offsetof(Compute, uniform_layout),
+     Py_READONLY, "uniform_layout"},
+    {"uniform_data", Py_T_OBJECT_EX, offsetof(Compute, uniform_data),
+     Py_READONLY, "uniform_data"},
     {0},
 };
 
@@ -6710,8 +6855,9 @@ static PyType_Spec GLObject_spec = {"hypergl.GLObject", sizeof(GLObject), 0,
 
 static int module_exec(PyObject *self) {
   ModuleState *state = (ModuleState *)PyModule_GetState(self);
-  if (!state)
+  if (!state) {
     return -1;
+  }
 
   // --- read VERSION ---
   PyModule_AddObject(self, "__version__",
@@ -6721,8 +6867,9 @@ static int module_exec(PyObject *self) {
   memset(&state->setup_lock, 0, sizeof(PyMutex));
 
   state->helper = PyImport_ImportModule("hypergl._hypergl");
-  if (!state->helper)
+  if (!state->helper) {
     return -1;
+  }
 
   state->empty_tuple = PyTuple_New(0);
   state->str_none = PyUnicode_FromString("none");
@@ -6768,16 +6915,19 @@ static int module_exec(PyObject *self) {
   PyModule_AddObject(self, "Compute", new_ref(state->Compute_type));
 
   PyObject *loader = PyObject_GetAttrString(state->helper, "loader");
-  if (loader)
+  if (loader) {
     PyModule_AddObject(self, "loader", loader);
+  }
 
   PyObject *calcsize = PyObject_GetAttrString(state->helper, "calcsize");
-  if (calcsize)
+  if (calcsize) {
     PyModule_AddObject(self, "calcsize", calcsize);
+  }
 
   PyObject *bind = PyObject_GetAttrString(state->helper, "bind");
-  if (bind)
+  if (bind) {
     PyModule_AddObject(self, "bind", bind);
+  }
 
 #ifdef EXTERN_GL
   PyModule_AddObject(self, "_extern_gl", PyUnicode_FromString(EXTERN_GL));
@@ -6813,12 +6963,14 @@ static PyObject *meth_load_opengl_function(PyObject *self, PyObject *arg) {
   void *(*wgl)(const char *) = state->wglGetProcAddress;
   PyMutex_Unlock(&state->global_lock);
 
-  if (!h)
+  if (!h) {
     return PyErr_SetString(PyExc_RuntimeError, "[HyperGL] No GL DLL"), NULL;
+  }
 
   void *proc = (void *)GetProcAddress(h, name);
-  if (!proc && wgl)
+  if (!proc && wgl) {
     proc = wgl(name);
+  }
 
   return proc ? PyLong_FromVoidPtr(proc)
               : (PyErr_Format(PyExc_RuntimeError,
