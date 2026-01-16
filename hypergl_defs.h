@@ -745,6 +745,54 @@ typedef unsigned int GLenum;
 typedef unsigned int GLuint;
 #endif
 
+#ifndef GLint
+typedef int GLint;
+#endif
+
+#ifndef GLsizei
+typedef int  GLsizei;
+#endif
+
 #define GL_NO_ERROR 0
+
+// -----------------------------------------------------------------------------
+// Uniform Binding Helpers & Dispatch Table
+// -----------------------------------------------------------------------------
+
+typedef void (*UniformUploadFn)(GLint location, GLsizei count, const void *ptr);
+
+typedef enum UniformFunction {
+    UF_1I = 0,
+    UF_2I,
+    UF_3I,
+    UF_4I,
+
+    UF_1B, // Booleans (uploaded as integers)
+    UF_2B,
+    UF_3B,
+    UF_4B,
+
+    UF_1U,
+    UF_2U,
+    UF_3U,
+    UF_4U,
+
+    UF_1F,
+    UF_2F,
+    UF_3F,
+    UF_4F,
+
+    UF_MAT2,
+    UF_MAT2x3,
+    UF_MAT2x4,
+    UF_MAT3x2,
+    UF_MAT3,
+    UF_MAT3x4,
+    UF_MAT4x2,
+    UF_MAT4x3,
+    UF_MAT4,
+
+    UF_COUNT
+} UniformFunction;
 
 #endif // HYPERGL_DEFS_H

@@ -413,103 +413,89 @@ static FORCE_INLINE void zeromem(void *NO_ALIAS data, int size) {
   memset(data, 0, size);
 }
 
+// -----------------------------------------------------------------------------
+// Uniform Binding Helpers & Dispatch Table
+// -----------------------------------------------------------------------------
+
+// -- Wrappers --
+
+// Integers
+static void u_1iv(GLint l, GLsizei c, const void *p) { glUniform1iv(l, c, p); }
+static void u_2iv(GLint l, GLsizei c, const void *p) { glUniform2iv(l, c, p); }
+static void u_3iv(GLint l, GLsizei c, const void *p) { glUniform3iv(l, c, p); }
+static void u_4iv(GLint l, GLsizei c, const void *p) { glUniform4iv(l, c, p); }
+
+// Unsigned Integers
+static void u_1uiv(GLint l, GLsizei c, const void *p) { glUniform1uiv(l, c, p); }
+static void u_2uiv(GLint l, GLsizei c, const void *p) { glUniform2uiv(l, c, p); }
+static void u_3uiv(GLint l, GLsizei c, const void *p) { glUniform3uiv(l, c, p); }
+static void u_4uiv(GLint l, GLsizei c, const void *p) { glUniform4uiv(l, c, p); }
+
+// Floats
+static void u_1fv(GLint l, GLsizei c, const void *p) { glUniform1fv(l, c, p); }
+static void u_2fv(GLint l, GLsizei c, const void *p) { glUniform2fv(l, c, p); }
+static void u_3fv(GLint l, GLsizei c, const void *p) { glUniform3fv(l, c, p); }
+static void u_4fv(GLint l, GLsizei c, const void *p) { glUniform4fv(l, c, p); }
+
+// Matrices (Always Transpose = GL_FALSE)
+// GLSL uses column-major matrices; transpose must be GL_FALSE per spec
+static void u_mat2(GLint l, GLsizei c, const void *p)   { glUniformMatrix2fv(l, c, GL_FALSE, p); }
+static void u_mat2x3(GLint l, GLsizei c, const void *p) { glUniformMatrix2x3fv(l, c, GL_FALSE, p); }
+static void u_mat2x4(GLint l, GLsizei c, const void *p) { glUniformMatrix2x4fv(l, c, GL_FALSE, p); }
+static void u_mat3x2(GLint l, GLsizei c, const void *p) { glUniformMatrix3x2fv(l, c, GL_FALSE, p); }
+static void u_mat3(GLint l, GLsizei c, const void *p)   { glUniformMatrix3fv(l, c, GL_FALSE, p); }
+static void u_mat3x4(GLint l, GLsizei c, const void *p) { glUniformMatrix3x4fv(l, c, GL_FALSE, p); }
+static void u_mat4x2(GLint l, GLsizei c, const void *p) { glUniformMatrix4x2fv(l, c, GL_FALSE, p); }
+static void u_mat4x3(GLint l, GLsizei c, const void *p) { glUniformMatrix4x3fv(l, c, GL_FALSE, p); }
+static void u_mat4(GLint l, GLsizei c, const void *p)   { glUniformMatrix4fv(l, c, GL_FALSE, p); }
+
+// -- Dispatch Table --
+
+static const UniformUploadFn uniform_upload_table[UF_COUNT] = {
+    [UF_1I] = u_1iv,   [UF_2I] = u_2iv,   [UF_3I] = u_3iv,   [UF_4I] = u_4iv,
+    [UF_1B] = u_1iv,   [UF_2B] = u_2iv,   [UF_3B] = u_3iv,   [UF_4B] = u_4iv,
+
+    [UF_1U] = u_1uiv,  [UF_2U] = u_2uiv,  [UF_3U] = u_3uiv,  [UF_4U] = u_4uiv,
+    [UF_1F] = u_1fv,   [UF_2F] = u_2fv,   [UF_3F] = u_3fv,   [UF_4F] = u_4fv,
+
+    [UF_MAT2]   = u_mat2,   [UF_MAT2x3] = u_mat2x3, [UF_MAT2x4] = u_mat2x4,
+    [UF_MAT3x2] = u_mat3x2, [UF_MAT3]   = u_mat3,   [UF_MAT3x4] = u_mat3x4,
+    [UF_MAT4x2] = u_mat4x2, [UF_MAT4x3] = u_mat4x3, [UF_MAT4]   = u_mat4,
+};
+
+// Ensure the table covers all enum values at compile time
+_Static_assert(
+    sizeof(uniform_upload_table) / sizeof(uniform_upload_table[0]) == UF_COUNT,
+    "uniform_upload_table must match UniformFunction enum"
+);
+
 static void bind_uniforms(const Pipeline *self) {
   const UniformHeader *const header =
       (UniformHeader *)self->uniform_layout_buffer.buf;
   const char *const data = (char *)self->uniform_data_buffer.buf;
+
   for (int i = 0; i < header->count; ++i) {
+    const UniformFunction func = (UniformFunction)header->binding[i].function;
     const void *ptr = data + header->binding[i].offset;
-    switch (header->binding[i].function) {
-    case 0:
-      glUniform1iv(header->binding[i].location, header->binding[i].count, ptr);
-      break;
-    case 1:
-      glUniform2iv(header->binding[i].location, header->binding[i].count, ptr);
-      break;
-    case 2:
-      glUniform3iv(header->binding[i].location, header->binding[i].count, ptr);
-      break;
-    case 3:
-      glUniform4iv(header->binding[i].location, header->binding[i].count, ptr);
-      break;
-    case 4:
-      glUniform1iv(header->binding[i].location, header->binding[i].count, ptr);
-      break;
-    case 5:
-      glUniform2iv(header->binding[i].location, header->binding[i].count, ptr);
-      break;
-    case 6:
-      glUniform3iv(header->binding[i].location, header->binding[i].count, ptr);
-      break;
-    case 7:
-      glUniform4iv(header->binding[i].location, header->binding[i].count, ptr);
-      break;
-    case 8:
-      glUniform1uiv(header->binding[i].location, header->binding[i].count, ptr);
-      break;
-    case 9:
-      glUniform2uiv(header->binding[i].location, header->binding[i].count, ptr);
-      break;
-    case 10:
-      glUniform3uiv(header->binding[i].location, header->binding[i].count, ptr);
-      break;
-    case 11:
-      glUniform4uiv(header->binding[i].location, header->binding[i].count, ptr);
-      break;
-    case 12:
-      glUniform1fv(header->binding[i].location, header->binding[i].count, ptr);
-      break;
-    case 13:
-      glUniform2fv(header->binding[i].location, header->binding[i].count, ptr);
-      break;
-    case 14:
-      glUniform3fv(header->binding[i].location, header->binding[i].count, ptr);
-      break;
-    case 15:
-      glUniform4fv(header->binding[i].location, header->binding[i].count, ptr);
-      break;
-    case 16:
-      glUniformMatrix2fv(header->binding[i].location, header->binding[i].count,
-                         0, ptr);
-      break;
-    case 17:
-      glUniformMatrix2x3fv(header->binding[i].location,
-                           header->binding[i].count, 0, ptr);
-      break;
-    case 18:
-      glUniformMatrix2x4fv(header->binding[i].location,
-                           header->binding[i].count, 0, ptr);
-      break;
-    case 19:
-      glUniformMatrix3x2fv(header->binding[i].location,
-                           header->binding[i].count, 0, ptr);
-      break;
-    case 20:
-      glUniformMatrix3fv(header->binding[i].location, header->binding[i].count,
-                         0, ptr);
-      break;
-    case 21:
-      glUniformMatrix3x4fv(header->binding[i].location,
-                           header->binding[i].count, 0, ptr);
-      break;
-    case 22:
-      glUniformMatrix4x2fv(header->binding[i].location,
-                           header->binding[i].count, 0, ptr);
-      break;
-    case 23:
-      glUniformMatrix4x3fv(header->binding[i].location,
-                           header->binding[i].count, 0, ptr);
-      break;
-    case 24:
-      glUniformMatrix4fv(header->binding[i].location, header->binding[i].count,
-                         0, ptr);
-      break;
-    default:
+
+    if (LIKELY(
+        func >= 0 && 
+        func < UF_COUNT && 
+        uniform_upload_table[func] != NULL
+    )) {
+      uniform_upload_table[func](
+          (GLint)header->binding[i].location,
+          (GLsizei)header->binding[i].count,
+          ptr
+      );
+    } else {
 #ifdef DEBUG
-      fprintf(stderr, "[HyperGL] Invalid uniform function id: %d\n",
-              header->binding[i].function);
+      fprintf(stderr,
+          "[HyperGL] Invalid or unbound uniform function: %d\n",
+          func
+      );
+      abort();
 #endif
-      break;
     }
   }
 }
