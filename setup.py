@@ -49,10 +49,15 @@ if sys.platform == 'win32':
     # ARCH & STANDARDS: Force x64 and C11
     # We use /clang: to pass flags if we are using clang-cl, otherwise cl.exe ignores them
     clang_bin = find_llvm_clang()
+    # Replace /O2 with /O3 if we found clang
     if clang_bin:
         extra_compile_args.append('/clang:--target=x86_64-pc-windows-msvc')
-    
-    extra_compile_args += ['/std:c11', '/O2', '/Zi']
+        # Aggressive clang-cl optimization
+        optimization_flag = '/O3' 
+    else:
+        optimization_flag = '/O2'
+
+    extra_compile_args += ['/std:c11', optimization_flag, '/Zi']
     libraries += ['opengl32', 'user32', 'gdi32']
     
     # Find the elusive .lib directory
