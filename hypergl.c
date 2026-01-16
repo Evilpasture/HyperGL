@@ -878,37 +878,63 @@ static int get_buffer_access(const ModuleState *state, PyObject *helper,
 }
 
 // Adapted to use ModuleState for caching
-static int get_topology(const ModuleState *state, PyObject *helper,
-                        PyObject *name, int *res) {
-  if (!helper || helper == Py_None || !name || name == Py_None) {
-    return 0;
-  }
+// -----------------------------------------------------------------------------
+// Topology Helper (Optimized)
+// -----------------------------------------------------------------------------
 
-  FETCH_HELPER_DICT(state, helper, TOPOLOGY, lookup);
+/*
+    Topology Mapping (GL Enums):
+    points          -> 0x0000 (0)
+    lines           -> 0x0001 (1)
+    line_loop       -> 0x0002 (2)
+    line_strip      -> 0x0003 (3)
+    triangles       -> 0x0004 (4)
+    triangle_strip  -> 0x0005 (5)
+    triangle_fan    -> 0x0006 (6)
+*/
 
-  PyObject *value = PyDict_GetItem(lookup, name);
-  if (!value) {
-    goto fail;
-  }
+static int get_topology(PyObject *obj, int *res) {
+    // 1. Fast Path: User passed an integer constant
+    if (PyLong_Check(obj)) {
+        long val = PyLong_AsLong(obj);
+        if (UNLIKELY(val < 0 || val > 6)) {
+            // GL_POINTS(0) to GL_TRIANGLE_FAN(6)
+            goto fail;
+        }
+        *res = (int)val;
+        return 1;
+    }
 
-  int overflow = 0;
-  long val = PyLong_AsLongAndOverflow(value, &overflow);
-  if (overflow || (val == -1 && PyErr_Occurred())) {
-    goto fail;
-  }
+    // 2. Compatibility Path: User passed a string
+    // We use raw C comparisons to avoid Python Dictionary overhead.
+    if (PyUnicode_Check(obj)) {
+        const char *str = PyUnicode_AsUTF8(obj);
+        if (!str) {return 0;}
 
-  if (val < INT_MIN || val > INT_MAX) {
-    goto fail;
-  }
-
-  *res = (int)val;
-  Py_DECREF(lookup);
-  return 1;
+        // Switch on the first character to reduce strcmp calls
+        switch (str[0]) {
+            case 'p': 
+                if (strcmp(str, "points") == 0) { *res = 0; return 1; }
+                break;
+            case 'l':
+                if (strcmp(str, "lines") == 0)      { *res = 1; return 1; }
+                if (strcmp(str, "line_loop") == 0)  { *res = 2; return 1; }
+                if (strcmp(str, "line_strip") == 0) { *res = 3; return 1; }
+                break;
+            case 't':
+                if (strcmp(str, "triangles") == 0)      { *res = 4; return 1; }
+                if (strcmp(str, "triangle_strip") == 0) { *res = 5; return 1; }
+                if (strcmp(str, "triangle_fan") == 0)   { *res = 6; return 1; }
+                break;
+            default:
+                return 0;
+        }
+    }
 
 fail:
-  PyErr_Clear();
-  Py_DECREF(lookup);
-  return 0;
+    // Don't set python error here, let the caller decide if it's fatal
+    // or let them try to format a specific error message.
+    return 0;
 }
 
 static int count_mipmaps(int width, int height) {
@@ -4818,8 +4844,8 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
   }
 
   int topology;
-  if (!get_topology(self->module_state, self->module_state->helper,
-                    topology_arg, &topology)) {
+  if (!get_topology(topology_arg, &topology)) {
+    PyErr_Format(PyExc_ValueError, "[HyperGL] invalid topology: %R", topology_arg);
     goto fail;
   }
 

@@ -4,6 +4,7 @@
 #include <Python.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 // --- Compiler Hints ---
 #if defined(__GNUC__) || defined(__clang__)
