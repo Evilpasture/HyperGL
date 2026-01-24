@@ -4332,6 +4332,7 @@ static PyObject *Image_meth_make_resident(Image *self, PyObject *args) {
     } else {
       PyErr_SetString(PyExc_RuntimeError,
                       "[HyperGL] Failed to make texture handle resident");
+      return NULL;
     }
   } else if (!resident && self->is_resident) {
     glMakeTextureHandleNonResidentARB(self->bindless_handle);
@@ -4340,6 +4341,7 @@ static PyObject *Image_meth_make_resident(Image *self, PyObject *args) {
     } else {
       PyErr_SetString(PyExc_RuntimeError,
                       "[HyperGL] Failed to make texture handle non-resident");
+      return NULL;
     }
   }
   PyMutex_Unlock(&self->ctx->state_lock);
