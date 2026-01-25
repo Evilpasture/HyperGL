@@ -5120,8 +5120,10 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
     view.itemsize = 1;
     view.format = NULL;
     view.ndim = 1;
-    view.shape = &view.len;
-    view.strides = &view.itemsize;
+    Py_ssize_t shape = view.len;
+    Py_ssize_t stride = 1;
+    view.shape = &shape;
+    view.strides = &stride;
     view.suboffsets = NULL;
     view.obj = (PyObject *)res;
     Py_INCREF(res);
