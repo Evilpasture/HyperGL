@@ -5595,11 +5595,12 @@ static Compute *Context_meth_compute(Context *self, PyObject *args,
   }
 
   res->ctx = self;
-  res->program = program;
-  res->descriptor_set = descriptor_set;
-  res->uniforms = uniforms_proxy;
-  res->uniform_layout = uniform_layout;
-  res->uniform_data = uniform_data_blob;
+  Py_INCREF(self);
+  res->program = program; program = NULL;
+  res->descriptor_set = descriptor_set; descriptor_set = NULL;
+  res->uniforms = uniforms_proxy; uniforms_proxy = NULL;
+  res->uniform_layout = uniform_layout; uniform_layout = NULL;
+  res->uniform_data = uniform_data_blob; uniform_data_blob = NULL;
   res->workgroup_size = NULL;
   res->create_kwargs = NULL;
   res->global_settings = NULL;
