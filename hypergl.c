@@ -3387,7 +3387,8 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args,
   static char *keywords[] = {"data",    "size",    "access",   "index",
                              "uniform", "storage", "external", NULL};
 
-  PyObject *data = Py_None;
+  PyObject *data = Py_None;               // borrowed
+  PyObject *contiguous_data = NULL;      // owned
   PyObject *size_arg = Py_None;
   PyObject *access_arg = Py_None;
   int index = 0;
@@ -3448,21 +3449,20 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args,
   int have_view = 0;
 
   if (data != Py_None) {
-    // Get contiguous memoryview (Returns New Reference)
-    data = PyMemoryView_GetContiguous(data, PyBUF_READ, 'C');
-    if (!data) {
+    contiguous_data = PyMemoryView_GetContiguous(data, PyBUF_READ, 'C');
+    if (!contiguous_data) {
       return NULL;
     }
 
-    if (PyObject_GetBuffer(data, &view, PyBUF_SIMPLE) < 0) {
-      Py_DECREF(data);
+    if (PyObject_GetBuffer(contiguous_data, &view, PyBUF_SIMPLE) < 0) {
+        Py_DECREF(contiguous_data);
       return NULL;
     }
 
     size = (int)view.len;
     if (size == 0) {
       PyBuffer_Release(&view);
-      Py_DECREF(data);
+        Py_DECREF(contiguous_data);
       PyErr_Format(PyExc_ValueError, "[HyperGL] invalid size");
       return NULL;
     }
@@ -3536,13 +3536,16 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args,
     // Rollback
     if (!external && buffer) {
       PyMutex_Lock(&self->state_lock);
-      glDeleteBuffers(1, (const unsigned int *)&buffer);
+      glDeleteBuffers(1, (const GLuint *)&buffer);
       PyMutex_Unlock(&self->state_lock);
     }
+    // If we had a view, we already released/decref'd it above,
+    // so we just return NULL.
     return NULL;
   }
 
   res->ctx = self;
+  Py_INCREF(self);
   res->buffer = buffer;
   res->target = target;
   res->size = size;
