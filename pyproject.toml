@@ -8,7 +8,7 @@ version = "1.0.1"
 description = "High Performance, Modernized OpenGL wrapper"
 readme = "README.md"
 authors = [{name = "Mai Huy Hiếu"}]
-license = "MIT"
+license = { text = "MIT" }
 # 3.13 is the first stable release with free-threading support. 
 requires-python = ">=3.13" 
 classifiers = [
