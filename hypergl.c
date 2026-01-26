@@ -3380,6 +3380,13 @@ static PyObject *meth_context(PyObject *self, PyObject *arg) {
   return PyObject_CallNoArgs((PyObject *)state->Context_type);
 }
 
+static PyObject *Context_meth_migrate(Context *self, PyObject *arg) {
+    // Update the internal thread ID to the current thread.
+    // Call this once at the start of your Render Thread loop.
+    self->thread_id = PyThread_get_thread_ident();
+    Py_RETURN_NONE;
+}
+
 // -----------------------------------------------------------------------------
 // Type: Buffer
 // -----------------------------------------------------------------------------
@@ -6704,6 +6711,7 @@ static PyMethodDef Context_methods[] = {
     {"end_frame", (PyCFunction)Context_meth_end_frame,
      METH_VARARGS | METH_KEYWORDS, NULL},
     {"release", (PyCFunction)Context_meth_release, METH_O, NULL},
+    {"migrate", (PyCFunction)Context_meth_migrate, METH_NOARGS, NULL},
     {NULL, NULL, 0, NULL},
 };
 

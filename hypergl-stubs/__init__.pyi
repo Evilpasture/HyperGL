@@ -615,6 +615,13 @@ class Context:
         """
         ...
 
+    def migrate(self) -> None:
+        """
+        Migrate the Context to the current thread.
+        Call this once at the start of your Render Thread loop if using multiple threads.
+        """
+        ...
+
     def gc(self) -> List[Buffer | Image | Pipeline | Compute]:
         """Trigger garbage collection of released GL objects."""
         ...
