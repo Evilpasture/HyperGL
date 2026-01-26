@@ -441,6 +441,8 @@ typedef struct Context
     unsigned int is_stencil_default   : 1;
     unsigned int is_blend_default     : 1;
     unsigned int padding_bits         : 5;
+
+    unsigned long thread_id; 
     
     GLStateShadow gl_state;
     Viewport current_viewport;

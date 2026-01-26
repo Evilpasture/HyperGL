@@ -3227,6 +3227,8 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
     return NULL;
   }
 
+  res->thread_id = PyThread_get_thread_ident();
+
   PyObject_GC_UnTrack((PyObject *)res);
 
   res->module_state = module_state;
@@ -6071,6 +6073,12 @@ static PyObject *Context_meth_end_frame(Context *self, PyObject *args,
 }
 
 static PyObject *Context_meth_release(Context *self, PyObject *arg) {
+  if (self->thread_id != PyThread_get_thread_ident()) {
+      PyErr_SetString(PyExc_RuntimeError, 
+          "[HyperGL] Context.release() must be called from the same thread that created the Context.");
+      return NULL;
+  }
+
   // Uses enqueue_trash logic where applicable,
   // or helper functions defined in the codebase.
 
