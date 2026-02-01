@@ -175,6 +175,12 @@ RESOLVE(GLuint64, glGetTextureHandleARB, int);
 RESOLVE(void, glMakeTextureHandleResidentARB, GLuint64);
 RESOLVE(void, glMakeTextureHandleNonResidentARB, GLuint64);
 
+// -- Fences --
+RESOLVE(GLsync, glFenceSync, GLenum, GLbitfield);
+RESOLVE(void, glDeleteSync, GLsync);
+RESOLVE(GLenum, glClientWaitSync, GLsync, GLbitfield, GLuint64);
+RESOLVE(void, glWaitSync, GLsync, GLbitfield, GLuint64);
+
 // -----------------------------------------------------------------------------
 // OpenGL Loader Logic
 // -----------------------------------------------------------------------------
@@ -352,6 +358,10 @@ static int load_gl(PyObject *loader) {
   load(glGetProgramResourceiv);
   load(glGetProgramResourceName);
   load(glGetBufferParameteriv);
+  load(glFenceSync);
+  load(glDeleteSync);
+  load(glClientWaitSync);
+  load(glWaitSync);
 
 #define load_optional(name)                                                    \
   do {                                                                         \
@@ -2889,8 +2899,9 @@ void flush_trash(const Context *self) {
   }
   // Delete OpenGL resources OUTSIDE the lock
   Py_BEGIN_ALLOW_THREADS for (size_t i = 0; i < count; i++) {
-    unsigned int id = (unsigned int)to_delete[i].id;
-    if (id == 0) {
+    uint64_t raw_id = to_delete[i].id;
+    unsigned int id = (unsigned int)raw_id;
+    if (raw_id == 0) {
       continue;
     }
     switch (to_delete[i].type) {
@@ -2920,6 +2931,9 @@ void flush_trash(const Context *self) {
       break;
     case TRASH_QUERY:
       glDeleteQueries(1, &id);
+      break;
+    case TRASH_FENCE:
+      glDeleteSync((GLsync)(uintptr_t)raw_id);
       break;
     default: {
       continue;
@@ -6134,6 +6148,12 @@ static PyObject *Context_meth_release(Context *self, PyObject *arg) {
       PyBuffer_Release(&compute->uniform_layout_buffer);
       PyBuffer_Release(&compute->uniform_data_buffer);
     }
+   } else if (Py_TYPE(arg) == self->module_state->Fence_type) {
+        Fence *f = (Fence *)arg;
+        if (!self->is_lost && f->sync) {
+            enqueue_trash(self->trash_shared, (uint64_t)(uintptr_t)f->sync, TRASH_FENCE);
+            f->sync = NULL;
+        }
   } else if (PyUnicode_CheckExact(arg) &&
              !PyUnicode_CompareWithASCIIString(arg, "shader_cache")) {
     PyObject *key;
@@ -6271,6 +6291,38 @@ static PyObject *inspect_descriptor_set(const DescriptorSet *set) {
   return res;
 }
 
+static Fence *Context_meth_fence(Context *self, PyObject *args) {
+    if (self->is_lost) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] context lost");
+        return NULL;
+    }
+
+    PyMutex_Lock(&self->state_lock);
+    GLsync sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    PyMutex_Unlock(&self->state_lock);
+
+    if (!sync) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] glFenceSync failed");
+        return NULL;
+    }
+
+    Fence *res = PyObject_GC_New(Fence, self->module_state->Fence_type);
+    if (!res) {
+        // Cleanup raw GL resource if alloc fails
+        PyMutex_Lock(&self->state_lock);
+        glDeleteSync(sync);
+        PyMutex_Unlock(&self->state_lock);
+        return NULL;
+    }
+
+    res->ctx = self;
+    Py_INCREF(self);
+    res->sync = sync;
+
+    PyObject_GC_Track(res);
+    return res;
+}
+
 static PyObject *meth_inspect(PyObject *self, PyObject *arg) {
   const ModuleState *module_state = (ModuleState *)PyModule_GetState(self);
 
@@ -6389,6 +6441,49 @@ static PyObject *ImageFace_meth_blit(const ImageFace *self, PyObject *args,
   }
 
   return blit_image_face(self, target, offset, size, crop, filter);
+}
+
+static PyObject *Fence_meth_wait(Fence *self, PyObject *args, PyObject *kwargs) {
+    static char *keywords[] = {"flags", "timeout", NULL};
+    int flags = 0; // Default: 0 (No flush)
+    unsigned long long timeout = GL_TIMEOUT_IGNORED;
+    
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|iK", keywords, &flags, &timeout)) {
+        return NULL;
+    }
+
+    if (!self->sync) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Invalid fence (already deleted?)");
+        return NULL;
+    }
+
+    if (self->ctx->is_lost) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Context lost");
+        return NULL;
+    }
+
+    GLenum result;
+    
+    // Release GIL while waiting so other threads run
+    Py_BEGIN_ALLOW_THREADS
+    result = glClientWaitSync(self->sync, (GLbitfield)flags, (GLuint64)timeout);
+    Py_END_ALLOW_THREADS
+
+    return PyLong_FromLong((int)result);
+}
+
+static PyObject *Fence_meth_wait_gpu(Fence *self, PyObject *args) {
+    if (!self->sync) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Invalid fence");
+        return NULL;
+    }
+    
+    // GPU-side wait doesn't block CPU, so we need the lock but don't drop GIL
+    PyMutex_Lock(&self->ctx->state_lock);
+    glWaitSync(self->sync, 0, GL_TIMEOUT_IGNORED);
+    PyMutex_Unlock(&self->ctx->state_lock);
+    
+    Py_RETURN_NONE;
 }
 
 // -----------------------------------------------------------------------------
@@ -6691,6 +6786,30 @@ static void GLObject_dealloc(GLObject *self) {
   Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
+static void Fence_dealloc(Fence *self) {
+    if (PyObject_GC_IsTracked((PyObject *)self)) {
+        PyObject_GC_UnTrack(self);
+    }
+
+    if (self->sync && self->ctx && !self->ctx->is_lost && self->ctx->trash_shared) {
+        // Cast pointer to uint64_t for storage
+        enqueue_trash(self->ctx->trash_shared, (uint64_t)(uintptr_t)self->sync, TRASH_FENCE);
+    }
+
+    Py_XDECREF(self->ctx);
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static int Fence_traverse(Fence *self, visitproc visit, void *arg) {
+    Py_VISIT(self->ctx);
+    return 0;
+}
+
+static int Fence_clear(Fence *self) {
+    Py_CLEAR(self->ctx);
+    return 0;
+}
+
 // -----------------------------------------------------------------------------
 // Python Module Definitions
 // -----------------------------------------------------------------------------
@@ -6712,6 +6831,7 @@ static PyMethodDef Context_methods[] = {
      METH_VARARGS | METH_KEYWORDS, NULL},
     {"release", (PyCFunction)Context_meth_release, METH_O, NULL},
     {"migrate", (PyCFunction)Context_meth_migrate, METH_NOARGS, NULL},
+    {"fence", (PyCFunction)Context_meth_fence, METH_NOARGS, NULL},
     {NULL, NULL, 0, NULL},
 };
 
@@ -6836,6 +6956,14 @@ static PyMethodDef Compute_methods[] = {
     {0},
 };
 
+static PyMethodDef Fence_methods[] = {
+    {"wait", (PyCFunction)Fence_meth_wait, METH_VARARGS | METH_KEYWORDS, 
+     "Block CPU until GPU passes this fence. Returns status enum."},
+    {"wait_gpu", (PyCFunction)Fence_meth_wait_gpu, METH_NOARGS, 
+     "Block GPU command queue until this fence is signaled. Returns None."},
+    {0},
+};
+
 // -----------------------------------------------------------------------------
 // Type Slots & Specs
 // -----------------------------------------------------------------------------
@@ -6917,6 +7045,14 @@ static PyType_Slot GLObject_slots[] = {
     {0},
 };
 
+static PyType_Slot Fence_slots[] = {
+    {Py_tp_dealloc, (void *)Fence_dealloc},
+    {Py_tp_traverse, (void *)Fence_traverse},
+    {Py_tp_clear, (void *)Fence_clear},
+    {Py_tp_methods, Fence_methods},
+    {0},
+};
+
 static PyType_Spec Context_spec = {"hypergl.Context", sizeof(Context), 0,
                                    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
                                    Context_slots};
@@ -6945,6 +7081,12 @@ static PyType_Spec GlobalSettings_spec = {
 static PyType_Spec GLObject_spec = {"hypergl.GLObject", sizeof(GLObject), 0,
                                     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
                                     GLObject_slots};
+                
+static PyType_Spec Fence_spec = {
+    "hypergl.Fence", sizeof(Fence), 0,
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
+    Fence_slots
+};
 
 // -----------------------------------------------------------------------------
 // Module Execution & Registration
@@ -7000,6 +7142,7 @@ static int module_exec(PyObject *self) {
   CREATE_TYPE(DescriptorSet_type, DescriptorSet_spec);
   CREATE_TYPE(GlobalSettings_type, GlobalSettings_spec);
   CREATE_TYPE(GLObject_type, GLObject_spec);
+  CREATE_TYPE(Fence_type, Fence_spec);
 
 #undef CREATE_TYPE
 
@@ -7010,6 +7153,7 @@ static int module_exec(PyObject *self) {
   PyModule_AddObject(self, "BufferView", new_ref(state->BufferView_type));
   PyModule_AddObject(self, "Pipeline", new_ref(state->Pipeline_type));
   PyModule_AddObject(self, "Compute", new_ref(state->Compute_type));
+  PyModule_AddObject(self, "Fence", new_ref(state->Fence_type));
 
   PyObject *loader = PyObject_GetAttrString(state->helper, "loader");
   if (loader) {

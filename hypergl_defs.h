@@ -186,6 +186,7 @@
 // --- Struct Definitions ---
 
 typedef unsigned long long GLuint64;
+typedef struct HyperGLSync *GLsync;
 typedef Py_ssize_t intptr;
 
 typedef struct VertexFormat
@@ -293,6 +294,7 @@ typedef struct ModuleState
     PyTypeObject *DescriptorSet_type;
     PyTypeObject *GlobalSettings_type;
     PyTypeObject *GLObject_type;
+    PyTypeObject *Fence_type;
     Limits limits;
     void *opengl_handle;
     void *(*wglGetProcAddress)(const char *);
@@ -310,13 +312,20 @@ typedef enum {
     TRASH_PROGRAM       = 6,
     TRASH_SHADER        = 7,
     TRASH_SAMPLER       = 8,
-    TRASH_QUERY         = 9
+    TRASH_QUERY         = 9,
+    TRASH_FENCE         = 10
 } TrashType;
 
 typedef struct {
-    int id;
+    uint64_t id;
     int type; 
 } TrashItem;
+
+typedef struct Fence {
+    PyObject_HEAD
+    struct Context *ctx;
+    GLsync sync;
+} Fence;
 
 typedef struct SharedTrash {
     PyMutex lock;
@@ -713,6 +722,15 @@ typedef struct {
 #define GL_PARAMETER_BUFFER_ARB 0x80EE 
 #define GL_COMMAND_BARRIER_BIT 0x00000040
 
+#define GL_SYNC_GPU_COMMANDS_COMPLETE 0x9117
+#define GL_SYNC_FLUSH_COMMANDS_BIT    0x00000001
+#define GL_ALREADY_SIGNALED           0x911A
+#define GL_TIMEOUT_EXPIRED            0x911B
+#define GL_CONDITION_SATISFIED        0x911C
+#define GL_WAIT_FAILED                0x911D
+// 0xFFFFFFFFFFFFFFFFull
+#define GL_TIMEOUT_IGNORED            18446744073709551615ULL 
+
 #define GL_MIN_UNIFORM_BUFFER_BINDINGS 8
 #define GL_ENGINE_MAX_VERTEX_ATTRIBS 64
 #define GL_MIN_UBO_SIZE 0x4000
@@ -746,6 +764,10 @@ typedef unsigned char GLboolean;
 #endif
 #ifndef GL_SHADER_STORAGE_BARRIER_BIT
     #define GL_SHADER_STORAGE_BARRIER_BIT      0x00002000
+#endif
+
+#ifndef GLbitfield
+typedef unsigned int GLbitfield;
 #endif
 
 #ifndef GLenum
