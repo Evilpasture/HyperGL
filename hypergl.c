@@ -3241,11 +3241,33 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
     return NULL;
   }
 
+  res->module_state = module_state;
   res->thread_id = PyThread_get_thread_ident();
+
+  // Handle Extraction for Migration
+  res->hdc = NULL;
+  res->hglrc = NULL;
+
+  if (module_state->default_loader && module_state->default_loader != Py_None) {
+      // Get the 'extra' attribute we stored in the Python loader function
+      PyObject *extra = PyObject_GetAttrString(module_state->default_loader, "extra");
+      if (extra && extra != Py_None && PyTuple_Check(extra) && PyTuple_Size(extra) >= 3) {
+          // Index 1: HDC, Index 2: HGLRC (as integers from ctypes)
+          PyObject *py_hdc = PyTuple_GetItem(extra, 1);
+          PyObject *py_rc = PyTuple_GetItem(extra, 2);
+          
+          // Convert Python integers back to C pointers safely
+          if (py_hdc && py_rc) {
+              res->hdc = PyLong_AsVoidPtr(py_hdc);
+              res->hglrc = PyLong_AsVoidPtr(py_rc);
+          }
+      }
+      Py_XDECREF(extra);
+      PyErr_Clear(); // Clear potential AttributeError if 'extra' isn't there
+  }
 
   PyObject_GC_UnTrack((PyObject *)res);
 
-  res->module_state = module_state;
   res->trash_shared = NULL;
   res->descriptor_set_cache = NULL;
   res->global_settings_cache = NULL;
@@ -3274,12 +3296,10 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
     return PyErr_NoMemory();
   }
 
-  // Initialize the mutex in the shared struct (Zeroing it is enough for
-  // PyMutex)
   memset(&shared->lock, 0, sizeof(PyMutex));
   shared->count = 0;
   shared->capacity = SHARED_TRASH_INITIAL_CAPACITY;
-  shared->ref_count = 1; // 1 ref held by the Context itself
+  shared->ref_count = 1; 
   res->trash_shared = shared;
 
   // --- Initialize Caches ---
@@ -3301,7 +3321,6 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
   Py_INCREF(default_framebuffer);
   res->default_framebuffer = default_framebuffer;
 
-  // Validate GL functions
   if (!glGetIntegerv) {
     PyErr_SetString(
         PyExc_RuntimeError,
@@ -3373,7 +3392,6 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
   Py_DECREF(default_framebuffer);
   PyMutex_Unlock(&module_state->setup_lock);
 
-  // If not already tracked (standard python), track it.
   if (!PyObject_GC_IsTracked((PyObject *)res)) {
     PyObject_GC_Track((PyObject *)res);
   }
@@ -3381,8 +3399,6 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
   return (PyObject *)res;
 
 fail:
-  // If we failed, dealloc will handle cleaning up caches and shared trash
-  // because ref_count was set to 1.
   Py_DECREF(res);
   Py_DECREF(default_framebuffer);
   PyMutex_Unlock(&module_state->setup_lock);
@@ -3394,9 +3410,34 @@ static PyObject *meth_context(PyObject *self, PyObject *arg) {
   return PyObject_CallNoArgs((PyObject *)state->Context_type);
 }
 
-static PyObject *Context_meth_migrate(Context *self, PyObject *arg) {
-    // Update the internal thread ID to the current thread.
-    // Call this once at the start of your Render Thread loop.
+// Method to unbind the context from the CURRENT thread
+static PyObject *Context_meth_release_thread(Context *self, PyObject *Py_UNUSED(ignored)) {
+    #ifdef _WIN32
+    if (!wglMakeCurrent(NULL, NULL)) {
+        PyErr_Format(PyExc_RuntimeError, "HyperGL: Failed to release thread. WinError: %lu", GetLastError());
+        return NULL;
+    }
+    #endif
+    self->thread_id = 0;
+    Py_RETURN_NONE;
+}
+
+// Method to bind the context to the NEW (calling) thread
+static PyObject *Context_meth_migrate(Context *self, PyObject *Py_UNUSED(ignored)) {
+    #ifdef _WIN32
+    // Actually teleport the context to the current OS thread
+    if (self->hdc && self->hglrc) {
+        if (!wglMakeCurrent((HDC)self->hdc, (HGLRC)self->hglrc)) {
+            unsigned long err = GetLastError();
+            PyErr_Format(PyExc_RuntimeError, 
+                "HyperGL: Migration failed. WinError: %lu. "
+                "Context is likely still bound to another thread.", err);
+            return NULL;
+        }
+    }
+    #endif
+    
+    // Update paperwork
     self->thread_id = PyThread_get_thread_ident();
     Py_RETURN_NONE;
 }
@@ -6107,12 +6148,6 @@ static PyObject *Context_meth_end_frame(Context *self, PyObject *args,
 }
 
 static PyObject *Context_meth_release(Context *self, PyObject *arg) {
-  if (self->thread_id != PyThread_get_thread_ident()) {
-      PyErr_SetString(PyExc_RuntimeError, 
-          "[HyperGL] Context.release() must be called from the same thread that created the Context.");
-      return NULL;
-  }
-
   // Uses enqueue_trash logic where applicable,
   // or helper functions defined in the codebase.
 
@@ -6862,6 +6897,7 @@ static PyMethodDef Context_methods[] = {
      METH_VARARGS | METH_KEYWORDS, NULL},
     {"release", (PyCFunction)Context_meth_release, METH_O, NULL},
     {"migrate", (PyCFunction)Context_meth_migrate, METH_NOARGS, NULL},
+    {"release_thread", (PyCFunction)Context_meth_release_thread, METH_NOARGS, NULL},
     {"fence", (PyCFunction)Context_meth_fence, METH_NOARGS, NULL},
     {NULL, NULL, 0, NULL},
 };
