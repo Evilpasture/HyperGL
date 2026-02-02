@@ -451,6 +451,9 @@ typedef struct Context
     unsigned int is_blend_default     : 1;
     unsigned int padding_bits         : 5;
 
+    // Raw OS handles for migration
+    void* hdc;   // The Device Context (Windows)
+    void* hglrc; // The OpenGL Context (Windows)
     unsigned long thread_id; 
     
     GLStateShadow gl_state;
