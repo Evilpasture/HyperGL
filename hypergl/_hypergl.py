@@ -257,6 +257,19 @@ UNIFORM_PACKER = {
     0x140F: (25, 1, 'Q'), 
 }
 
+# Sync Object Constants
+SYNC_GPU_COMMANDS_COMPLETE = 0x9117
+SYNC_FLUSH_COMMANDS_BIT    = 0x00000001
+
+# glClientWaitSync return values
+ALREADY_SIGNALED    = 0x911A
+TIMEOUT_EXPIRED     = 0x911B
+CONDITION_SATISFIED = 0x911C
+WAIT_FAILED         = 0x911D
+
+# Timeout convenience
+TIMEOUT_IGNORED     = 0xFFFFFFFFFFFFFFFF
+
 class DefaultLoader:
     def __init__(self):
         self.extra: tuple | None = None
