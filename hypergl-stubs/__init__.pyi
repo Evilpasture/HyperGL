@@ -495,6 +495,7 @@ class Compute:
 class Context:
     """
     The main entry point for managing OpenGL state and creating resources.
+    Supports high-performance AZDO workflows and multi-threaded context handover.
     """
     info: Info
     includes: Dict[str, str]
@@ -646,15 +647,31 @@ class Context:
 
     def release(self, obj: Buffer | Image | Pipeline | Compute | Fence | Literal['shader_cache'] | Literal['all']) -> None:
         """
-        Manually release an OpenGL object or clear internal caches.
-        This bypasses the garbage collector for immediate resource cleanup.
+        Add an OpenGL object to the Shared Trash bin for safe deletion.
+        
+        This method is thread-safe. Resources are queued in a mutex-protected 
+        buffer and physically deleted by the Render Thread during the next 
+        call to new_frame() or end_frame().
         """
         ...
 
+
     def migrate(self) -> None:
         """
-        Migrate the Context to the current thread.
-        Call this once at the start of your Render Thread loop if using multiple threads.
+        Bind (Handover) the OpenGL context to the calling OS thread.
+        
+        This performs the low-level OS handshake (e.g., wglMakeCurrent) 
+        required to move GPU rendering capability to a new thread.
+        Ensure the previous owner has called release_thread() first.
+        """
+        ...
+
+    def release_thread(self) -> None:
+        """
+        Unbind the OpenGL context from the current OS thread.
+        
+        Call this on the 'Main Thread' after initialization to allow 
+         a dedicated 'Render Thread' to claim the context via migrate().
         """
         ...
 
