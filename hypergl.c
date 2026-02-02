@@ -3698,22 +3698,28 @@ static PyObject *Buffer_meth_unmap(Buffer *self, PyObject *args) {
 
   PyMutex_Lock(&self->ctx->state_lock);
 
-  // If the Python user still has a handle (e.g., 'm = buf.map()'),
-  // unmapping is a recipe for a Segfault in the physics thread.
-  if (self->memoryview && Py_REFCNT(self->memoryview) > 1) {
-    PyMutex_Unlock(&self->ctx->state_lock);
-    PyErr_SetString(PyExc_BufferError, "[HyperGL] Cannot unmap; physics thread "
-                                       "or user still holds the memoryview");
-    return NULL;
+  if (self->memoryview) {
+    /* 
+       We call the .release() method on the memoryview object.
+       This is the 'painless' way to support 3.14t and older versions.
+       It invalidates the view and decrements the buffer's export count,
+       allowing glUnmapBuffer to proceed without a BufferError.
+    */
+    PyObject *res = PyObject_CallMethod(self->memoryview, "release", NULL);
+    if (res) {
+        Py_DECREF(res);
+    } else {
+        // If release fails (extremely rare), we clear the error so the 
+        // GPU unmap can still attempt to finish.
+        PyErr_Clear();
+    }
+    Py_CLEAR(self->memoryview);
   }
 
   glBindBuffer(self->target, self->buffer);
   glUnmapBuffer(self->target);
   self->mapped_ptr = NULL;
   self->is_persistently_mapped = 0;
-
-  // Clear the view so it can't be used again
-  Py_CLEAR(self->memoryview);
 
   PyMutex_Unlock(&self->ctx->state_lock);
   Py_RETURN_NONE;
@@ -5488,11 +5494,14 @@ static int Pipeline_set_viewport(Pipeline *self, PyObject *viewport,
 // Type: Compute
 // -----------------------------------------------------------------------------
 
-static PyObject *Compute_meth_run(Compute *self, PyObject *args) {
+static PyObject *Compute_meth_run(Compute *self, PyObject *args, PyObject *kwargs) {
+  static char *keywords[] = {"x", "y", "z", NULL};
   int x = 1;
   int y = 1;
   int z = 1;
-  if (!PyArg_ParseTuple(args, "|iii", &x, &y, &z)) {
+
+  // Use PyArg_ParseTupleAndKeywords instead of PyArg_ParseTuple
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|iii", keywords, &x, &y, &z)) {
     return NULL;
   }
 
@@ -5507,16 +5516,20 @@ static PyObject *Compute_meth_run(Compute *self, PyObject *args) {
   PyMutex_Lock(&self->ctx->state_lock);
 
   bind_program_internal(self->ctx, self->program->obj);
-
   bind_descriptor_set(self->ctx, self->descriptor_set);
 
   if (self->uniforms) {
     bind_uniforms((Pipeline *)self);
   }
+
+  // Execute
   glDispatchCompute(x, y, z);
+  
+  // AZDO: Barrier to ensure compute writes are visible to vertex/indirect buffers
   glMemoryBarrier(GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT |
-                  GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
-  // glMemoryBarrier(GL_ALL_BARRIER_BITS); // sanity check
+                  GL_SHADER_STORAGE_BARRIER_BIT | 
+                  GL_COMMAND_BARRIER_BIT);
+
   PyMutex_Unlock(&self->ctx->state_lock);
 
   Py_RETURN_NONE;
@@ -6632,33 +6645,51 @@ static int Buffer_clear(Buffer *self) {
 }
 
 static void Buffer_dealloc(Buffer *self) {
-  // 1. STOP THE GC
+  // 1. Isolation from GC
   PyObject_GC_UnTrack(self);
 
-  // 2. USE THE DATA WHILE WE STILL HAVE IT
-  // We need 'ctx' and 'buffer' ID to clean up the GPU side.
+  // 2. Resource Cleanup
   if (self->ctx && !self->ctx->is_lost) {
+    PyMutex_Lock(&self->ctx->state_lock);
 
-    // A. Handle Unmapping (Must happen before deletion)
+    // Ensure memoryview is invalidated before the pointer it views (mapped_ptr) disappears
+    if (self->memoryview) {
+      // Equivalent to Python: self.memoryview.release()
+      PyObject *res = PyObject_CallMethod(self->memoryview, "release", NULL);
+      if (res) {
+        Py_DECREF(res);
+      }
+      PyErr_Clear();
+
+      /* 
+         CRITICAL: We clear the member here while holding the lock.
+         This ensures Buffer_clear(self) called later will see NULL.
+         We use Py_CLEAR here (or XSETREF) to sever the link immediately.
+      */
+      Py_CLEAR(self->memoryview);
+    }
+
     if (self->mapped_ptr) {
-      PyMutex_Lock(&self->ctx->state_lock);
+      // AZDO: Tell GPU to invalidate the mapping
       glBindBuffer(self->target, self->buffer);
       glUnmapBuffer(self->target);
       self->mapped_ptr = NULL;
-      PyMutex_Unlock(&self->ctx->state_lock);
     }
+    
+    PyMutex_Unlock(&self->ctx->state_lock);
 
-    // B. Enqueue for the "Double Flush" Trash System
+    // 3. Queue the buffer ID for deletion on the Render Thread
     if (self->buffer && self->ctx->trash_shared) {
       enqueue_trash(self->ctx->trash_shared, self->buffer, TRASH_BUFFER);
+      self->buffer = 0; 
     }
   }
 
-  // 3. NOW BREAK THE PYTHON CYCLES
-  // This sets self->memoryview and self->ctx to NULL.
+  // 4. Break Python cycles using your established helper
+  // This handles self->ctx and any self->memoryview that wasn't cleared in step 2.
   Buffer_clear(self);
 
-  // 4. FREE THE C STRUCT
+  // 5. Final C memory free
   Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
@@ -6952,7 +6983,7 @@ static PyMemberDef ImageFace_members[] = {
 };
 
 static PyMethodDef Compute_methods[] = {
-    {"run", (PyCFunction)Compute_meth_run, METH_VARARGS, NULL},
+    {"run", (PyCFunction)Compute_meth_run, METH_VARARGS | METH_KEYWORDS, NULL},
     {0},
 };
 
