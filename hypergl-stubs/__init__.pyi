@@ -113,6 +113,14 @@ BufferAccess = Literal[
 ]
 """Usage hints for Buffer memory allocation."""
 
+SYNC_GPU_COMMANDS_COMPLETE: int
+SYNC_FLUSH_COMMANDS_BIT: int
+ALREADY_SIGNALED: int
+TIMEOUT_EXPIRED: int
+CONDITION_SATISFIED: int
+WAIT_FAILED: int
+TIMEOUT_IGNORED: int
+
 # --- Helper Classes & Types ---
 
 class BufferView:
@@ -255,6 +263,28 @@ class ImageFace:
             size: (width, height) destination size.
             crop: (x, y, w, h) source region to copy.
             filter: If True, uses GL_LINEAR interpolation; otherwise GL_NEAREST.
+        """
+        ...
+
+class Fence:
+    """
+    Represents an OpenGL Sync Object (Fence).
+    Used to synchronize CPU-GPU execution for AZDO (Persistent Mapping).
+    """
+    def wait(self, flags: int = 0, timeout: int = TIMEOUT_IGNORED) -> int:
+        """
+        Block the CPU until the GPU reaches this fence.
+        Releases the GIL while waiting.
+        
+        Returns:
+            One of: ALREADY_SIGNALED, TIMEOUT_EXPIRED, CONDITION_SATISFIED, WAIT_FAILED.
+        """
+        ...
+
+    def wait_gpu(self) -> None:
+        """
+        Instructs the GPU to wait for this fence before executing subsequent 
+        commands in the queue. Does not block the CPU.
         """
         ...
 
@@ -608,7 +638,13 @@ class Context:
         """
         ...
 
-    def release(self, obj: Buffer | Image | Pipeline | Compute | Literal['shader_cache'] | Literal['all']) -> None:
+    def fence(self) -> Fence:
+        """
+        Insert a new sync fence into the OpenGL command stream.
+        """
+        ...
+
+    def release(self, obj: Buffer | Image | Pipeline | Compute | Fence | Literal['shader_cache'] | Literal['all']) -> None:
         """
         Manually release an OpenGL object or clear internal caches.
         This bypasses the garbage collector for immediate resource cleanup.
