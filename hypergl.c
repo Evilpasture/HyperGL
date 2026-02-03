@@ -6199,7 +6199,7 @@ static PyObject *Context_meth_release(Context *self, PyObject *arg) {
    } else if (Py_TYPE(arg) == self->module_state->Fence_type) {
         Fence *f = (Fence *)arg;
         if (!self->is_lost && f->sync) {
-            enqueue_trash(self->trash_shared, (uint64_t)(uintptr_t)f->sync, TRASH_FENCE);
+            enqueue_trash(self->trash_shared, (int)(uint64_t)(uintptr_t)f->sync, TRASH_FENCE);
             f->sync = NULL;
         }
   } else if (PyUnicode_CheckExact(arg) &&
@@ -6859,7 +6859,7 @@ static void Fence_dealloc(Fence *self) {
 
     if (self->sync && self->ctx && !self->ctx->is_lost && self->ctx->trash_shared) {
         // Cast pointer to uint64_t for storage
-        enqueue_trash(self->ctx->trash_shared, (uint64_t)(uintptr_t)self->sync, TRASH_FENCE);
+        enqueue_trash(self->ctx->trash_shared, (int)(uint64_t)(uintptr_t)self->sync, TRASH_FENCE);
     }
 
     Py_XDECREF(self->ctx);
