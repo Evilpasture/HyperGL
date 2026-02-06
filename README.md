@@ -6,138 +6,113 @@
 
 > **"Trains Reinforcement Learning agents at 12,000+ FPS with zero-copy NumPy readback. No window manager required."**
 
-HyperGL is a high-performance rendering engine written in C that bridges the gap between Python's ease of use and the raw power of modern GPU features. It is designed for **Machine Learning**, **Game Engine Development**, and **High-Performance Visualization**.
+HyperGL is a high-performance graphics runtime that treats OpenGL 4.6 as a target for its own **C-side Bytecode Virtual Machine**. It is designed for massive simulations, reinforcement learning, and game engines where the Python interpreter is usually the bottleneck.
 
-Unlike traditional wrappers (PyOpenGL) that incur heavy CPU overhead per-call and block the GIL, HyperGL uses an immutable **Pipeline** architecture and supports **AZDO (Approaching Zero Driver Overhead)** features like Multi-Draw Indirect and Bindless Textures.
 
----
+## The HyperGL VM
 
-## 🚀 Key Features
+Traditional wrappers (PyOpenGL, ModernGL) pay a **"Python Boundary Tax"** for every draw call. If you loop 10,000 times in Python to draw a forest, your CPU spends 90% of its time managing Python method lookups and 10% actually talking to the GPU.
 
-*   ✅ **Headless Rendering:** Runs on Linux servers, Docker containers, and CI/CD pipelines without X11 or a window manager.
-*   ✅ **Zero-Copy Readback:** Read render targets directly into **NumPy** arrays or **PyTorch** tensors at 12k+ FPS.
-*   ✅ **Bindless Textures (`GL_ARB_bindless_texture`):** Pass 64-bit texture handles to shaders via SSBOs. Access thousands of unique textures in a single draw call.
-*   ✅ **Multi-Draw Indirect (MDI):** Generate draw commands on the GPU or CPU and render millions of instances with a single Python call.
-*   ✅ **Compute Shaders:** First-class support for Compute and SSBOs for GPU-side pre-processing.
-*   ✅ **Free-Threading Ready:** Fully compatible with Python 3.13+ free-threading (No-GIL), allowing physics and ML logic to run in parallel with the render loop.
-*   ✅ **C-Side Command Buffers:** Record render passes into a bytecode buffer and execute them with a single C-call, completely bypassing Python interpreter overhead during the draw loop.
+**HyperGL solves this by moving the render loop into a C-VM:**
+1.  **Record:** High-level Python logic (loops, branches, subroutines) is compiled once into a linear binary buffer.
+2.  **Submit:** A single C-call replays the entire scene at the limit of the CPU cache.
+3.  **No GIL:** The VM releases the GIL during execution, allowing your Python logic and Graphics to run on separate cores.
 
----
+### Performance Benchmarks (10,000 Draw Calls)
+*Tests conducted on Python 3.14.2t (Free-Threaded)*
 
-## 📦 Installation
+| Method | Overhead | 10k Draws | Speedup |
+| :--- | :--- | :--- | :--- |
+| **Traditional Python Loop** | ~65ns / call | 0.65ms | 1x |
+| **HyperGL Bytecode VM** | **~9ns / call** | **0.09ms** | **~7x faster** |
 
-```bash
-pip install git+https://github.com/Evilpasture/HyperGL.git
-```
+*Note: In complex scenes with texture/UBO swapping, the gap widens to **50x-100x** because the VM manages hardware state transitions entirely in C.*
 
-*Requirements: OpenGL 3.3+ (4.6 recommended for AZDO features).*
 
----
+## Key Features
 
-## ⚡ Examples
+*   ✅ **Turing-Complete Command VM:** Supports `GOTO`, `CALL/RET` (Subroutines), `ALU` math, and 8 internal registers.
+*   ✅ **GPU-Driven Branching:** Instructions like `skip_if_zero` allow the C-loop to skip draw calls based on data in mapped GPU memory (Occlusion Culling).
+*   ✅ **Binary Scene Format (.hgb):** Serialize recorded bytecode to disk and re-inflate it instantly, bypassing Python setup entirely.
+*   ✅ **AZDO & Bindless:** Native support for Multi-Draw Indirect and `GL_ARB_bindless_texture` for "infinite" texture variety.
+*   ✅ **Persistent Mapping:** Map GPU SSBOs directly to NumPy/Numba views for zero-copy CPU-GPU communication.
 
-### 1. Headless RL / ML Pipeline (12,000 FPS)
 
-Render a scene and get the pixel data into NumPy instantly. Perfect for OpenAI Gym environments.
+## The Compiler DSL
+
+HyperGL provides a high-level compiler to make VM programming feel like standard Python.
 
 ```python
 import hypergl
-import numpy as np
 import struct
 
-# 1. Initialize Headless (No Window required)
-hypergl.init(headless=True)
-ctx = hypergl.context()
-
-# 2. Setup Resources
-# 84x84 is standard for Atari/RL
-target = ctx.image((84, 84), format='rgba8unorm', texture=False) 
-
-pipeline = ctx.pipeline(
-    vertex_shader="...",   # Standard GLSL
-    fragment_shader="...",
-    framebuffer=[target],
-    vertex_count=3
-)
-
-# 3. Zero-Copy Memory
-# Allocate ONCE. We write directly into this buffer.
-observation = np.zeros((84, 84, 4), dtype=np.uint8)
-
-# 4. Training Loop
-while training:
-    # Update State
-    pipeline.uniforms['u_time'][:] = struct.pack('f', time)
-
-    # Render (Releases GIL)
-    ctx.new_frame(clear=True)
-    pipeline.render()
-    ctx.end_frame()
-
-    # Readback (Zero Allocation)
-    target.read(into=observation)
+# 1. Define a Reusable Subroutine (Asset)
+@hypergl.subroutine
+def draw_forest_cluster(cb):
+    sc = hypergl.SceneCompiler(cb)
+    cb.bind_pipeline(tree_pipe)
     
-    # 'observation' now contains the frame. No return value, no garbage.
+    # A Loop that runs entirely in C
+    with sc.loop(reg=0, count=1000):
+        cb.draw()
+
+# 2. Compile the Frame
+cmd = ctx.command_buffer()
+sc = hypergl.SceneCompiler(cmd)
+
+cmd.begin()
+cmd.clear()
+
+# Logic-based branching in C (Occlusion Culling)
+with sc.condition(visibility_ssbo, offset=0):
+    draw_forest_cluster(cmd) # Emits 1 C instruction: CALL
+
+cmd.end()
+
+# 3. Submit
+while True:
+    # Releases GIL. Python can run Physics (Culverin) or AI in parallel.
+    cmd.submit() 
 ```
 
-### 2. AZDO: 100,000 Sprites (Bindless + Indirect)
+## Zero-Copy Ecosystem
 
-Render massive scenes with almost zero CPU overhead using modern OpenGL 4.6 features.
+HyperGL is designed to work in synergy with **[Culverin](https://github.com/Evilpasture/Culverin)** (Jolt Physics for Python). It's another project of mine.
 
-```python
-# 1. Create Bindless Texture
-texture = ctx.image((512, 512), texture=True)
-texture.make_resident(True) # Make accessible to shaders
+1.  **Physics (Culverin):** Calculates 10,000 ragdolls and writes to a C-Shadow Buffer.
+2.  **Graphics (HyperGL):** Maps that same memory as an SSBO.
+3.  **Submission:** The VM reads positions directly from the C-array.
+4.  **Result:** High-fidelity simulation where **data never becomes a Python object** between the physics step and the draw call.
 
-# 2. Upload 64-bit Handle to GPU Buffer (SSBO)
-# The helper method automatically fetches the handle and writes it.
-ssbo = ctx.buffer(size=1024, storage=True)
-ssbo.write_texture_handle(offset=0, image=texture)
+## Architecture
 
-# 3. Pack Indirect Commands
-# Draw 6 vertices, 100,000 instances
-cmd_data = ctx.pack_indirect([(6, 100000, 0, 0)])
-indirect_buf = ctx.buffer(data=cmd_data)
+1.  **The Context:** Managing the hardware handshake (Headless, GLFW, SDL2).
+2.  **Pipeline State Objects (PSO):** Immutable state blobs (Shaders, Blending, Depth) validated at startup.
+3.  **The VM:** A RISC-inspired execution loop for draw submission.
+4.  **The Compiler:** High-level Python tools that emit bytecode.
 
-# 4. Render
-ctx.new_frame()
-# Single C-call triggers the GPU to execute the command buffer
-pipeline.render_indirect(buffer=indirect_buf, count=1)
-ctx.end_frame()
-```
+## Safety
 
----
-
-## 🛠️ Architecture
-
-HyperGL is built on three core pillars:
-
-1.  **Context**: The entry point. Manages the connection to the driver (Headless or Windowed).
-2.  **Pipeline**: An immutable state object. You define shaders, blending, depth state, and layouts **once**. At render time, it's just a pointer swap.
-3.  **Resources**: `Buffer` (VBO/SSBO/UBO) and `Image` (Texture/FBO) wrap the raw OpenGL handles and manage lifetime safely.
-
-### Why is it so fast?
-*   **C-Extension**: The render loop happens in C.
-*   **State Caching**: HyperGL caches internal GL state to avoid redundant driver calls.
-*   **GIL Release**: Long-running GL operations release the Global Interpreter Lock.
-*   **Direct Memory Access**: `memoryview` support allows Python to write directly to mapped GPU memory.
-
----
-
-## ⚠️ Advanced Usage Notes
-
-*   **Bindless Safety**: When using `make_resident(True)`, you **must** keep the Python `Image` object alive. If it is garbage collected while resident, the GPU handle becomes invalid, potentially crashing the driver.
-*   **Context Loss**: If running in a windowed environment (GLFW/SDL), handle context loss by checking `ctx.lost`.
-
----
+HyperGL is a low-level tool. While it protects the Python interpreter from crashing, it gives you enough power to crash your GPU driver (TDR).
+*   **Volatile Memory:** The VM peeks at live GPU memory; ensure your buffers are mapped.
+*   **Infinite Loops:** You can create them with `GOTO`. We check for Python signals (Ctrl+C) every 1024 instructions to keep you safe.
+*   **Manual Deletion:** Command Buffers hold references to their assets, but remember to call `.release('all')` when shutting down.
 
 ## Building from Source
 
-HyperGL has **no Python dependencies**. You only need a C compiler.
+HyperGL is a self-contained C-extension with zero Python dependencies.
 
 ```bash
-# Windows (MSVC) / Linux (GCC/Clang)
-python setup.py build_ext --inplace
+# Clone with submodules if you are contributing
+git clone --recursive https://github.com/Evilpasture/HyperGL.git
+cd HyperGL
+pip install .
+```
+
+or
+
+```bash
+pip install git+https://github.com/Evilpasture/HyperGL.git
 ```
 
 ---
