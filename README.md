@@ -20,6 +20,7 @@ Unlike traditional wrappers (PyOpenGL) that incur heavy CPU overhead per-call an
 *   ✅ **Multi-Draw Indirect (MDI):** Generate draw commands on the GPU or CPU and render millions of instances with a single Python call.
 *   ✅ **Compute Shaders:** First-class support for Compute and SSBOs for GPU-side pre-processing.
 *   ✅ **Free-Threading Ready:** Fully compatible with Python 3.13+ free-threading (No-GIL), allowing physics and ML logic to run in parallel with the render loop.
+*   ✅ **C-Side Command Buffers:** Record render passes into a bytecode buffer and execute them with a single C-call, completely bypassing Python interpreter overhead during the draw loop.
 
 ---
 
