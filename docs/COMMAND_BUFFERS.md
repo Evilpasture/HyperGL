@@ -119,3 +119,31 @@ The VM has **8 internal registers (i0-i7)** that persist across subroutine calls
 2.  **Use Subroutines:** They keep your main buffer clean and the `CMD_CALL` instruction is virtually free.
 3.  **Register Math:** Perform counters and offsets in registers rather than re-recording.
 4.  **Headless Performance:** In headless/ML environments, use a single Command Buffer to avoid all Python overhead during training steps.
+
+## 6. The .hgb Binary Format
+
+HyperGL Command Buffers can be serialized into a relocatable binary format. This allows for extremely fast scene loading and the creation of "Baked Scene" assets.
+
+### File Header (16 bytes)
+| Field | Offset | Size | Description |
+| :--- | :--- | :--- | :--- |
+| **Magic** | 0 | 4 | `HGLB` (0x424C4748) |
+| **Major** | 4 | 2 | ISA Version (Breaking changes) |
+| **Minor** | 6 | 2 | Feature Version (Backward compatible) |
+| **Data Size** | 8 | 4 | Byte length of the recorded bytecode |
+| **Reserved** | 12 | 4 | Alignment padding |
+
+### Usage
+```python
+# Save to disk
+bytecode, assets = cmd.serialize()
+with open("world.hgb", "wb") as f:
+    f.write(bytecode)
+# Store 'assets' metadata separately (JSON/MsgPack)
+
+# Load from disk
+with open("world.hgb", "rb") as f:
+    raw_bytes = f.read()
+new_cmd = ctx.command_buffer()
+new_cmd.patch(raw_bytes, reconstructed_assets)
+```
