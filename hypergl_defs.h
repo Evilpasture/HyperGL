@@ -295,6 +295,7 @@ typedef struct ModuleState
     PyTypeObject *GlobalSettings_type;
     PyTypeObject *GLObject_type;
     PyTypeObject *Fence_type;
+    PyTypeObject *CommandBuffer_type;
     Limits limits;
     void *opengl_handle;
     void *(*wglGetProcAddress)(const char *);
@@ -843,6 +844,91 @@ typedef enum ImageFormatTupleIndex {
     IF_CLEAR_TYPE,
     IF_TUPLE_SIZE
 } ImageFormatTupleIndex;
+
+// --- Command Buffer Definitions ---
+
+typedef enum CommandType {
+    CMD_BIND_PIPELINE = 1,
+    CMD_BIND_DESCRIPTOR_SET = 2,
+    CMD_BIND_COMPUTE = 3,
+    CMD_DRAW = 4,
+    CMD_DRAW_INDIRECT = 5,
+    CMD_DISPATCH = 6,
+    CMD_BARRIER = 7,
+    CMD_CLEAR = 8
+} CommandType;
+
+typedef struct CmdHeader {
+    uint32_t type;
+    uint32_t size; // Byte size of this packet (header + payload)
+} CmdHeader;
+
+typedef struct CmdBindPipeline {
+    CmdHeader header;
+    Pipeline *pipeline;
+} CmdBindPipeline;
+
+typedef struct CmdBindCompute {
+    CmdHeader header;
+    Compute *compute;
+} CmdBindCompute;
+
+typedef struct CmdBindDescriptorSet {
+    CmdHeader header;
+    DescriptorSet *set;
+} CmdBindDescriptorSet;
+
+typedef struct CmdDraw {
+    CmdHeader header;
+    int32_t vertex_count;
+    int32_t instance_count;
+    int32_t first;
+    int32_t _pad; // Keeps struct aligned to 8 bytes
+} CmdDraw;
+
+typedef struct CmdDrawIndirect {
+    CmdHeader header;
+    Buffer *buffer;
+    int32_t count;
+    int32_t offset;
+    int32_t stride;
+    int32_t _pad;
+} CmdDrawIndirect;
+
+typedef struct CmdDispatch {
+    CmdHeader header;
+    int32_t x, y, z;
+    int32_t _pad;
+} CmdDispatch;
+
+typedef struct CmdBarrier {
+    CmdHeader header;
+    int32_t flags;
+    int32_t _pad;
+} CmdBarrier;
+
+typedef struct CmdClear {
+    CmdHeader header;
+    int32_t mask;
+    int32_t _pad;
+} CmdClear;
+
+typedef struct CommandBuffer {
+    PyObject_HEAD
+    Context *ctx;
+    
+    // The Bytecode
+    uint8_t *data;
+    size_t size;
+    size_t capacity;
+    
+    // Object Lifecycle Management
+    // We must keep references to every Pipeline, Buffer, etc. used in the recording
+    // so they don't get GC'd while this buffer exists.
+    PyObject *ref_list; 
+    
+    int recording;
+} CommandBuffer;
 
 // MISC defs
 
