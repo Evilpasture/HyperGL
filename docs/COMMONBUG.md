@@ -108,3 +108,17 @@ def worker():
     ctx.migrate() # <--- REQUIRED
     ctx.new_frame()
 ```
+
+## 8. "Invalid vertex attribute location X"
+
+**Symptom:** `ValueError: Invalid vertex attribute location 0` (or 1, 2, etc.)
+
+**Cause:**
+You are trying to bind a vertex buffer to a location that the GLSL compiler has removed or never saw.
+1.  **Missing Input:** You forgot to write `layout(location=X) in vec3 my_var;` in the Vertex Shader.
+2.  **Unused Input:** You defined the input, but didn't use it to calculate `gl_Position` or an `out` variable. The GLSL compiler deleted it to save registers, and HyperGL's validation now sees that slot as "Empty."
+
+**The Fix:**
+*   Ensure the attribute is defined in GLSL with the correct `location`.
+*   Ensure the attribute is "Active" by using it in a calculation.
+*   *Debug Tip:* If you just want to keep an attribute for later but don't need it yet, add `gl_Position.xyz += my_attr * 0.00001;` to force it to stay active.
