@@ -6,6 +6,20 @@
 #include <stdint.h>
 #include <string.h>
 
+#define HGL_MAGIC 0x424C4748  // "HGLB" (HyperGL Binary) in Little Endian
+
+// Current VM Specification version
+#define HGL_ISA_MAJOR 1
+#define HGL_ISA_MINOR 0
+
+typedef struct HGLHeader {
+    uint32_t magic;    // Must be HGL_MAGIC
+    uint16_t major;    // Breaking changes
+    uint16_t minor;    // New features (backward compatible)
+    uint32_t data_size; // Size of bytecode following this header
+    uint32_t _reserved; // Alignment padding
+} HGLHeader;
+
 // --- Compiler Hints ---
 #if defined(__GNUC__) || defined(__clang__)
     #define LIKELY(x)   __builtin_expect(!!(x), 1)

@@ -7699,14 +7699,26 @@ static PyObject *CommandBuffer_meth_serialize(CommandBuffer *self, PyObject *Py_
         return NULL;
     }
 
+    size_t bytecode_size = self->size;
+    size_t total_size = sizeof(HGLHeader) + bytecode_size;
+
     // 1. Copy raw bytecode
     uint8_t *blob = PyMem_Malloc(self->size);
     if (!blob) return PyErr_NoMemory();
-    memcpy(blob, self->data, self->size);
+
+    HGLHeader *h = (HGLHeader *)blob;
+    h->magic = HGL_MAGIC;
+    h->major = HGL_ISA_MAJOR;
+    h->minor = HGL_ISA_MINOR;
+    h->data_size = (uint32_t)bytecode_size;
+    h->_reserved = 0;
 
     // 2. Symbols -> Indices
-    uint8_t *ptr = blob;
-    uint8_t *end = ptr + self->size;
+    uint8_t *payload = blob + sizeof(HGLHeader);
+    memcpy(payload, self->data, bytecode_size);
+
+    uint8_t *ptr = payload;
+    uint8_t *end = payload + bytecode_size;
 
     while (ptr < end) {
         CmdHeader *header = (CmdHeader *)ptr;
@@ -7760,7 +7772,7 @@ static PyObject *CommandBuffer_meth_serialize(CommandBuffer *self, PyObject *Py_
         ptr += header->size;
     }
 
-    PyObject *bytecode = PyBytes_FromStringAndSize((char *)blob, (Py_ssize_t)self->size);
+    PyObject *bytecode = PyBytes_FromStringAndSize((char *)blob, (Py_ssize_t)total_size);
     PyMem_Free(blob);
 
     // Return (bytecode, ref_list) - everything needed to recreate this buffer
@@ -7771,20 +7783,50 @@ static PyObject *CommandBuffer_meth_patch(CommandBuffer *self, PyObject *args) {
     PyObject *bytecode_obj;
     PyObject *ref_list;
     
-    // Explicitly check for Bytes and List types
-    if (!PyArg_ParseTuple(args, "O!O!", &PyBytes_Type, &bytecode_obj, &PyList_Type, &ref_list)) {
+    if (!PyArg_ParseTuple(args, "O!O!", &PyBytes_Type, &bytecode_obj, &PyList_Type, &ref_list)) 
+        return NULL;
+
+    const uint8_t *raw_data = (const uint8_t *)PyBytes_AS_STRING(bytecode_obj);
+    Py_ssize_t total_size = PyBytes_GET_SIZE(bytecode_obj);
+
+    if (total_size < (Py_ssize_t)sizeof(HGLHeader)) {
+        PyErr_SetString(PyExc_ValueError, "[HyperGL] Invalid binary: Header missing.");
         return NULL;
     }
 
-    Py_ssize_t bc_size = PyBytes_GET_SIZE(bytecode_obj);
+    // 1. Validate Header
+    HGLHeader *h = (HGLHeader *)raw_data;
+    if (h->magic != HGL_MAGIC) {
+        PyErr_SetString(PyExc_ValueError, "[HyperGL] Invalid binary: Magic number mismatch.");
+        return NULL;
+    }
+
+    if (h->major != HGL_ISA_MAJOR) {
+        PyErr_Format(PyExc_RuntimeError, 
+            "[HyperGL] Incompatible binary. File uses ISA v%d, but library is v%d. Aborting.", 
+            h->major, HGL_ISA_MAJOR);
+        return NULL;
+    }
+
+    if (h->minor != HGL_ISA_MINOR) {
+        // Minor mismatch -> Just a warning
+        PyObject *warn_msg = PyUnicode_FromFormat(
+            "[HyperGL] Binary Version Warning: File v%d.%d vs Library v%d.%d",
+            h->major, h->minor, HGL_ISA_MAJOR, HGL_ISA_MINOR);
+        PyErr_WarnEx(PyExc_RuntimeWarning, PyUnicode_AsUTF8(warn_msg), 1);
+        Py_DECREF(warn_msg);
+    }
+
+    // 2. Extract Payload
+    const uint8_t *payload = raw_data + sizeof(HGLHeader);
+    uint32_t bc_size = h->data_size;
+
     if (CommandBuffer_ensure(self, (size_t)bc_size) < 0) return NULL;
-
-    // 1. Load the raw data
-    memcpy(self->data, PyBytes_AS_STRING(bytecode_obj), bc_size);
+    memcpy(self->data, payload, bc_size);
     self->size = (size_t)bc_size;
-    self->recording = 0; // Finalize buffer
+    self->recording = 0;
 
-    // 2. Indices -> Live Pointers (Relocation)
+    // 3. Inflate Pointers
     uint8_t *ptr = self->data;
     uint8_t *end = ptr + self->size;
 
@@ -7801,7 +7843,7 @@ static PyObject *CommandBuffer_meth_patch(CommandBuffer *self, PyObject *args) {
                 void *null_ptr = NULL; \
                 memcpy((void *)&(member), (const void *)&null_ptr, sizeof(void *)); \
             } else { \
-                PyErr_SetString(PyExc_ValueError, "[HyperGL VM] Invalid reference index."); \
+                PyErr_SetString(PyExc_ValueError, "[HyperGL VM] Invalid index during inflation."); \
                 return NULL; \
             } \
         } while(0)
