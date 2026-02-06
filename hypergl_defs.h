@@ -10,7 +10,7 @@
 
 // Current VM Specification version
 #define HGL_ISA_MAJOR 1
-#define HGL_ISA_MINOR 0
+#define HGL_ISA_MINOR 1
 
 typedef struct HGLHeader {
     uint32_t magic;    // Must be HGL_MAGIC
@@ -908,6 +908,8 @@ typedef enum CommandType {
     CMD_WAIT_FENCE          = 41,
     CMD_SKIP_IF_NOT_READY   = 42,
 
+    CMD_SET_UNIFORM         = 50, 
+
     // --- Debug (100+) ---
     CMD_PRINT               = 100,
     CMD_DUMP                = 101
@@ -1067,6 +1069,13 @@ typedef struct CmdStackOp {
     uint32_t reg;
     uint32_t _pad;
 } CmdStackOp;
+
+typedef struct CmdSetUniform {
+    CmdHeader header;
+    int32_t location;   // glGetUniformLocation result
+    uint32_t reg;       // Register index (0-7)
+    uint32_t type;      // 0=float, 1=int, 2=uint
+} CmdSetUniform;
 
 typedef struct CommandBuffer {
     PyObject_HEAD
