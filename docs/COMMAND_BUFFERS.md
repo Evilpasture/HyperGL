@@ -1,84 +1,121 @@
-# Command Buffers
+# Command Buffers & The HyperGL VM
 
-**HyperGL Command Buffers** allow you to record a sequence of rendering commands once and replay them infinitely at C-speed.
+The **Command Buffer** is the most advanced feature of HyperGL. It allows you to record a sequence of rendering commands into a binary bytecode buffer and execute them in a tight C loop.
 
-This feature moves the "Render Loop" overhead from Python to C, allowing for **Zero-GIL rendering** and massive CPU savings.
+This architecture bypasses the Python interpreter entirely during the render pass, allowing for **Zero-GIL Rendering**, **GPU-Driven Control Flow**, and **Modular Subroutines**.
 
-## 1. The Workflow
+---
 
-Instead of calling `pipeline.render()` every frame, you record it.
+## 1. The Workflow: Compile once, Run forever
+
+HyperGL Command Buffers use a **Bake-and-Play** model.
+
+1.  **Begin:** `cmd.begin()` resets the buffer.
+2.  **Record:** High-level Python calls are translated into 8-byte aligned C packets.
+3.  **End:** `cmd.end()` finalizes the buffer and patches all jump offsets (Labels/Gotos).
+4.  **Submit:** `cmd.submit()` replays the bytecode at the speed of the CPU cache.
 
 ```python
-# 1. Create Buffer
 cmd = ctx.command_buffer()
-
-# 2. Record Commands
-# (The context is NOT modified during recording)
+cmd.begin()
 cmd.clear()
 cmd.bind_pipeline(my_pipeline)
-cmd.bind_descriptor_set(material_a)
-cmd.draw(vertex_count=3)
-
-# 3. Submit (Inside the loop)
-# Executes the C-bytecode. Extremely fast.
-while running:
-    ctx.new_frame(clear=False) # Buffer handles clear
-    cmd.submit()
-    ctx.end_frame()
-```
-
-## 2. Dynamic State (Uniforms)
-
-Since the Command Buffer is immutable, how do you animate things?
-**Mapped Memory.**
-
-The `Pipeline` object exposes its uniforms as `memoryview`s. You can write to them *even while the command buffer is recorded*.
-
-```python
-# Record once
-cmd.bind_pipeline(pipe)
 cmd.draw()
+cmd.end()
 
-# Loop
-t = 0.0
-while True:
-    # Update the memory the pipeline looks at
-    pipe.uniforms['u_time'][:] = struct.pack('f', t) 
-    
-    # Submit sees the new data instantly
+while running:
+    # 0 Python overhead. The entire frame is replayed in C.
     cmd.submit() 
-    t += 0.01
 ```
 
-## 3. Supported Commands
+---
 
-| Method | Description |
-| :--- | :--- |
-| `clear(mask)` | Clears the framebuffer/screen. |
-| `bind_pipeline(pipe)` | Binds a Graphics Pipeline (Shader, VAO, Blend state). |
-| `bind_compute(comp)` | Binds a Compute Pipeline. |
-| `bind_descriptor_set(set)` | Fast-swaps resources (Textures/UBOs) without changing Shaders. |
-| `draw(vertex_count, ...)` | Issues `glDrawArrays` or `glDrawElements`. |
-| `draw_indirect(buffer, ...)` | Issues `glMultiDrawIndirect` (AZDO). |
-| `dispatch(x, y, z)` | Runs a Compute Shader. |
-| `barrier(flags)` | Issues `glMemoryBarrier`. |
+## 2. High-Level Python Compiler
 
-## 4. Advanced: Material Swapping
+While the C VM works with "Assembly-like" instructions, HyperGL provides high-level Python constructs to make recording complex logic intuitive.
 
-The most powerful feature is mixing `bind_pipeline` (Expensive) and `bind_descriptor_set` (Cheap).
+### Loops and Conditions
+The `SceneCompiler` translates Python `with` blocks into `GOTO`, `LABEL`, and `SKIP` instructions.
 
 ```python
-# Bind the heavy state once (Shaders, Depth, Blending)
-cmd.bind_pipeline(uber_pipeline)
+sc = hypergl.SceneCompiler(cmd)
 
-for material in materials:
-    # Cheap switch: Just Textures and Uniform Buffers
-    cmd.bind_descriptor_set(material.descriptor_set)
+# VM-side Loop: repeats 100 times entirely in C
+with sc.loop(reg=0, count=100):
+    cmd.draw()
+
+# GPU-Driven Branching: skips the block if vis_buffer[0] == 0
+with sc.condition(vis_buffer, offset=0):
+    cmd.print("Object is visible!")
     cmd.draw()
 ```
 
-## 5. Threading & Safety
+### Modular Subroutines
+The `@subroutine` decorator allows you to define reusable chunks of rendering logic. Subroutines are recorded once and called via the `CALL` instruction, preserving hardware state inheritance.
 
-*   **Recording:** Can be done on **Any Thread** (Worker). It just writes to a malloc'd byte array.
-*   **Submission:** Must be done on the **Render Thread** (Context Owner).
-*   **Lifecycle:** The CommandBuffer holds strong references to every object it uses. It is safe to `del pipeline` in Python; the Command Buffer keeps it alive until the buffer itself is destroyed.
+```python
+@hypergl.subroutine
+def draw_skybox(cb):
+    cb.bind_pipeline(sky_pipe)
+    cb.draw()
+
+# In main buffer:
+main_cmd.begin()
+draw_skybox(main_cmd) # Emits a single C-level CMD_CALL
+main_cmd.end()
+```
+
+---
+
+## 3. Instruction Set Reference (ISA)
+
+### 🎨 Graphics & Compute
+*   `clear(mask)`: Clears the FBO.
+*   `bind_pipeline(pipe)`: Binds Shaders/VAO/State.
+*   `bind_descriptor_set(set)`: Swaps textures/UBOs without changing shaders.
+*   `draw(vc, ic, first)`: Standard draw. `-1` inherits from Pipeline.
+*   `draw_indirect(buf, count...)`: AZDO indirect drawing.
+*   `dispatch(x, y, z)` / `barrier(flags)`: Compute management.
+
+### 🔀 Control Flow & Subroutines
+*   `call(other_cb)`: Executes another buffer. Inherits parent state. (Max depth: 16).
+*   `ret()`: Exits current buffer immediately.
+*   `label(name)` / `goto(target)`: Named jumps.
+*   `skip_if_zero(buf, offset)`: Skips the **next** instruction if memory is 0.
+
+### 🔢 Registers & ALU
+The VM has **8 internal registers (i0-i7)** that persist across subroutine calls.
+*   `set_iter(reg, val)`: Set register value.
+*   `load_reg(reg, buf, offset)`: Read `uint32` from GPU memory into register.
+*   `store_reg(reg, buf, offset)`: Write register value to GPU memory.
+*   `alu(reg_a, reg_b, op)`: Arithmetic (`add`, `sub`, `mul`, `div`, `and`, `or`).
+*   `jump_iter(reg, target)`: Decrement register and jump if `> 0`.
+
+### ⏱️ Synchronization (Fencing)
+*   `signal(fence)`: Updates a Fence object with a new sync point.
+*   `wait(fence)`: **GPU-side wait**. Pauses GPU queue until fence is reached.
+*   `skip_if_not_ready(fence)`: **Non-blocking poll**. Skips the next instruction if the GPU hasn't reached the fence yet.
+
+---
+
+## 4. Concurrency & Safety
+
+### The "Zero-GIL" submission
+`cmd.submit()` releases the GIL. This is the "Holy Grail" for Python 3.13t:
+1.  **Core A (Render Thread):** Enters `cmd.submit()`, locks the GL context, and starts spinning through bytecode.
+2.  **Core B (Logic Thread):** Python continues running AI, Physics (Culverin), or Networking.
+3.  **Result:** The rendering logic effectively consumes **zero** Python time.
+
+### Instruction Integrity
+*   **Volatile Reads:** `skip_if_zero` and `load_reg` use `volatile` C pointers, ensuring the VM always sees the latest data written by the GPU or other CPU threads.
+*   **Yield Points:** The VM checks for Python signals (Ctrl+C) every 1024 instructions. Even an infinite `GOTO` loop in C can be interrupted.
+*   **Memory Safety:** Bounds checks are performed on every pointer advancement. If the bytecode is corrupted, execution aborts safely.
+
+---
+
+## 5. Performance Tips
+
+1.  **Use `bind_descriptor_set`:** Switching Pipelines (Shaders) is expensive. Switching Descriptor Sets (Textures) is cheap.
+2.  **Use Subroutines:** They keep your main buffer clean and the `CMD_CALL` instruction is virtually free.
+3.  **Register Math:** Perform counters and offsets in registers rather than re-recording.
+4.  **Headless Performance:** In headless/ML environments, use a single Command Buffer to avoid all Python overhead during training steps.
