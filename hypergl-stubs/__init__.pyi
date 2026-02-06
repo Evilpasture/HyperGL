@@ -225,10 +225,28 @@ class Info(TypedDict):
     max_vertex_attribs: int
     max_draw_buffers: int
     max_samples: int
+    max_shader_storage_buffer_bindings: int
 
 class ContextLoader(Protocol):
     """Callback protocol for loading OpenGL function pointers."""
-    def load_opengl_function(name: str) -> int: ...
+    def load_opengl_function(self, name: str) -> int: ...
+
+# --- Internal State Objects ---
+
+class DescriptorSet:
+    """
+    A baked set of resource bindings (Uniform Buffers, Storage Buffers, and Samplers).
+    Internal object used by Pipelines and CommandBuffers to swap materials 
+    without changing the underlying shader program.
+    """
+    pass
+
+class GlobalSettings:
+    """
+    A baked set of global OpenGL states (Depth, Stencil, Blending, Culling).
+    Internal object used to minimize redundant state changes in the driver.
+    """
+    pass
 
 # --- Main Objects ---
 
@@ -285,6 +303,83 @@ class Fence:
         """
         Instructs the GPU to wait for this fence before executing subsequent 
         commands in the queue. Does not block the CPU.
+        """
+        ...
+
+class CommandBuffer:
+    """
+    A recorded sequence of OpenGL commands that can be replayed at C-speed.
+    
+    Command Buffers allow you to 'bake' your render logic once and execute it 
+    entirely within a C loop, bypassing Python interpreter overhead and 
+    releasing the GIL during the draw phase.
+    """
+
+    def bind_pipeline(self, pipeline: Pipeline) -> None:
+        """
+        Binds a graphics pipeline (Shaders, VAO, FBO, and Blend/Depth state).
+        Subsequent draw calls will use this state.
+        """
+        ...
+
+    def bind_compute(self, compute: Compute) -> None:
+        """
+        Binds a compute pipeline. Subsequent dispatch calls will use this state.
+        """
+        ...
+
+    def bind_descriptor_set(self, descriptor_set: DescriptorSet) -> None:
+        """
+        Swaps resource bindings (Textures, UBOs, SSBOs) without changing 
+        the active pipeline. Ideal for high-performance material swapping.
+        """
+        ...
+
+    def clear(self, mask: int = 0x4100 | 0x0400) -> None:
+        """
+        Clears the currently bound framebuffer.
+        Default mask is GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT.
+        """
+        ...
+
+    def draw(self, vertex_count: int = -1, instance_count: int = -1, first: int = -1) -> None:
+        """
+        Issues a non-indexed or indexed draw call based on the bound pipeline.
+        
+        Args:
+            vertex_count: Number of vertices. If -1, uses Pipeline.vertex_count.
+            instance_count: Number of instances. If -1, uses Pipeline.instance_count.
+            first: Start vertex or index offset. If -1, uses Pipeline.first_vertex.
+        """
+        ...
+
+    def draw_indirect(self, buffer: Buffer, count: int = 1, offset: int = 0, stride: int = 0) -> None:
+        """
+        Issues a Multi-Draw Indirect (MDI) call using commands stored in a GPU buffer.
+        Automatically issues a memory barrier to ensure previous compute writes are visible.
+        """
+        ...
+
+    def dispatch(self, x: int, y: int, z: int) -> None:
+        """
+        Dispatches the currently bound compute shader with the given workgroup dimensions.
+        """
+        ...
+
+    def barrier(self, flags: int = 0xFFFFFFFF) -> None:
+        """
+        Issues a glMemoryBarrier. Default is GL_ALL_BARRIER_BITS.
+        Ensures memory writes (like Compute SSBOs) are visible to subsequent commands.
+        """
+        ...
+
+    def submit(self) -> None:
+        """
+        Executes the recorded bytecode sequence in a tight C loop.
+        
+        This method releases the GIL, allowing other Python threads (like Physics 
+        or AI) to run in parallel while the GPU is being fed. Submission must 
+        happen on the thread that owns the OpenGL context.
         """
         ...
 
@@ -642,6 +737,13 @@ class Context:
     def fence(self) -> Fence:
         """
         Insert a new sync fence into the OpenGL command stream.
+        """
+        ...
+
+    def command_buffer(self) -> CommandBuffer:
+        """
+        Creates a new Command Buffer for recording.
+        Recording can happen on any thread, but submission must happen on the render thread.
         """
         ...
 
