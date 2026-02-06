@@ -99,3 +99,45 @@ ctx.release_thread()
 ctx.migrate() 
 # Now Thread B can call ctx.new_frame()
 ```
+
+## 5. Dual-Path Execution: Immediate vs. Baked
+
+HyperGL provides two ways to interact with the GPU. Choosing the right one is key to performance.
+
+| Feature | Immediate Mode (`pipe.render()`) | Command Buffer (`cmd.submit()`) |
+| :--- | :--- | :--- |
+| **Complexity** | Simple, Pythonic | Advanced, Bytecode-based |
+| **Overhead** | ~10-50μs per call | **~1-2μs per buffer** |
+| **GIL** | GIL-bound (Mostly) | **GIL-Free** |
+| **Logic** | Python `if/for` loops | **C-side `skip/goto` loops** |
+| **Best For** | UI, Prototyping, One-offs | **World Rendering, Particles, RL** |
+
+### The "Single-Instruction" Truth
+Technically, calling `pipeline.render()` is exactly the same as creating a Command Buffer with a single `DRAW` instruction and submitting it. By keeping immediate methods, you are just providing a "Short-Circuit" for that common use case.
+
+---
+
+### Pro-Tip: "The UI Bridge"
+One very cool trick you can do is **Subroutine Injection**:
+
+```python
+# Record the heavy world once
+world_cmd = ctx.command_buffer()
+world_cmd.begin()
+world_cmd.draw_world()
+world_cmd.end()
+
+# In your render loop:
+while True:
+    ctx.new_frame()
+    
+    # 1. Path A: Baked (Ultra Fast)
+    world_cmd.submit() 
+    
+    # 2. Path B: Immediate (Flexible)
+    # Draw dynamic UI that changes every frame in Python
+    for button in ui.active_buttons:
+        ui_pipe.render() 
+        
+    ctx.end_frame()
+```
