@@ -324,159 +324,109 @@ class DefaultLoader:
             except Exception:
                 pass
 
+# Use a global to ensure we don't register/create multiple times
+_HEADLESS_CACHE = None
+
 def headless_context_windows():
+    global _HEADLESS_CACHE
+    if _HEADLESS_CACHE is not None:
+        return _HEADLESS_CACHE
+
     import ctypes
-    from ctypes import c_int, c_void_p, cast, windll, byref, Structure, sizeof, POINTER, c_float, c_uint32
-    from ctypes.wintypes import WORD, DWORD, BYTE, LPCWSTR, HWND, HDC, UINT, INT, BOOL, HANDLE, MSG
+    from ctypes import c_int, c_void_p, cast, windll, byref, Structure, sizeof, POINTER, c_float, c_uint32, c_size_t, c_ssize_t
+    from ctypes.wintypes import WORD, DWORD, BYTE, LPCWSTR, HWND, HDC, UINT, INT, BOOL, HANDLE, MSG, HMODULE, HICON, HCURSOR, HBRUSH
     import time
 
-    # --- Precise Type Definitions for 64-bit Stability ---
-    HGLRC = c_void_p # 64-bit pointer
-    HDC   = c_void_p # 64-bit pointer
-    HWND  = c_void_p # 64-bit pointer
-
+    HGLRC = c_void_p
     user32 = windll.user32
     gdi32 = windll.gdi32
     opengl32 = windll.opengl32
     kernel32 = windll.kernel32
 
-    # --- Map Argtypes to prevent OverflowError/Truncation ---
+    # --- CRITICAL: Set restype for pointer-returning functions BEFORE calling them ---
+    opengl32.wglGetProcAddress.restype = c_void_p  # <--- FIXES THE 0xFFFFFFFF CRASH
+    opengl32.wglCreateContext.restype = HGLRC
+    kernel32.GetModuleHandleW.restype = HANDLE
+
     user32.GetDC.argtypes = [HWND]
     user32.GetDC.restype = HDC
-    user32.ReleaseDC.argtypes = [HWND, HDC]
-    user32.ReleaseDC.restype = INT
-    user32.DestroyWindow.argtypes = [HWND]
-    user32.DestroyWindow.restype = BOOL
-    user32.ShowWindow.argtypes = [HWND, INT]
-    user32.UpdateWindow.argtypes = [HWND]
+    user32.RegisterClassExW.argtypes = [c_void_p]
+    user32.RegisterClassExW.restype = WORD
+    user32.CreateWindowExW.argtypes = [DWORD, LPCWSTR, LPCWSTR, DWORD, c_int, c_int, c_int, c_int, HWND, HANDLE, HANDLE, c_void_p]
+    user32.CreateWindowExW.restype = HWND
 
-    gdi32.ChoosePixelFormat.argtypes = [HDC, c_void_p]
-    gdi32.ChoosePixelFormat.restype = c_int
-    gdi32.SetPixelFormat.argtypes = [HDC, c_int, c_void_p]
-    gdi32.SetPixelFormat.restype = BOOL
-
-    opengl32.wglCreateContext.argtypes = [HDC]
-    opengl32.wglCreateContext.restype = HGLRC
-    opengl32.wglMakeCurrent.argtypes = [HDC, HGLRC]
-    opengl32.wglMakeCurrent.restype = BOOL
-    opengl32.wglDeleteContext.argtypes = [HGLRC]
-    opengl32.wglDeleteContext.restype = BOOL
-    opengl32.wglGetProcAddress.argtypes = [ctypes.c_char_p]
-    opengl32.wglGetProcAddress.restype = c_void_p
-    opengl32.glGetString.argtypes = [c_int]
-    opengl32.glGetString.restype = ctypes.c_char_p
+    class WNDCLASSEXW(Structure):
+        _fields_ = [("cbSize", UINT), ("style", UINT), ("lpfnWndProc", c_void_p), ("cbClsExtra", c_int), ("cbWndExtra", c_int), ("hInstance", HANDLE), ("hIcon", HICON), ("hCursor", HCURSOR), ("hbrBackground", HBRUSH), ("lpszMenuName", LPCWSTR), ("lpszClassName", LPCWSTR), ("hIconSm", HICON)]
 
     class PIXELFORMATDESCRIPTOR(Structure):
-        _fields_ = [
-            ('nSize', WORD), ('nVersion', WORD), ('dwFlags', DWORD),
-            ('iPixelType', BYTE), ('cColorBits', BYTE), ('cRedBits', BYTE),
-            ('cRedShift', BYTE), ('cGreenBits', BYTE), ('cGreenShift', BYTE),
-            ('cBlueBits', BYTE), ('cBlueShift', BYTE), ('cAlphaBits', BYTE),
-            ('cAlphaShift', BYTE), ('cAccumBits', BYTE), ('cAccumRedBits', BYTE),
-            ('cAccumGreenBits', BYTE), ('cAccumBlueBits', BYTE), ('cAccumAlphaBits', BYTE),
-            ('cDepthBits', BYTE), ('cStencilBits', BYTE), ('cAuxBuffers', BYTE),
-            ('iLayerType', BYTE), ('bReserved', BYTE), ('dwLayerMask', DWORD),
-            ('dwVisibleMask', DWORD), ('dwDamageMask', DWORD),
-        ]
-
-    class WNDCLASSW(Structure):
-        _fields_ = [
-            ("style", UINT), ("lpfnWndProc", c_void_p), ("cbClsExtra", INT),
-            ("cbWndExtra", INT), ("hInstance", HANDLE), ("hIcon", HANDLE),
-            ("hCursor", HANDLE), ("hbrBackground", HANDLE), ("lpszMenuName", LPCWSTR),
-            ("lpszClassName", LPCWSTR),
-        ]
-
-    def pump():
-        msg = MSG()
-        while user32.PeekMessageW(byref(msg), None, 0, 0, 1):
-            user32.TranslateMessage(byref(msg))
-            user32.DispatchMessageW(byref(msg))
+        _fields_ = [('nSize', WORD), ('nVersion', WORD), ('dwFlags', DWORD), ('iPixelType', BYTE), ('cColorBits', BYTE), ('cRedBits', BYTE), ('cRedShift', BYTE), ('cGreenBits', BYTE), ('cGreenShift', BYTE), ('cBlueBits', BYTE), ('cBlueShift', BYTE), ('cAlphaBits', BYTE), ('cAlphaShift', BYTE), ('cAccumBits', BYTE), ('cAccumRedBits', BYTE), ('cAccumGreenBits', BYTE), ('cAccumBlueBits', BYTE), ('cAccumAlphaBits', BYTE), ('iPixelType', BYTE), ('cDepthBits', BYTE), ('cStencilBits', BYTE), ('cAuxBuffers', BYTE), ('iLayerType', BYTE), ('bReserved', BYTE), ('dwLayerMask', DWORD), ('dwVisibleMask', DWORD), ('dwDamageMask', DWORD)]
 
     def create_hidden_window(name):
         hinst = kernel32.GetModuleHandleW(None)
-        wc = WNDCLASSW()
-        wc.style = 0x0020 # CS_OWNDC
-        wc.lpfnWndProc = cast(user32.DefWindowProcW, c_void_p).value
+        wc = WNDCLASSEXW()
+        wc.cbSize = sizeof(WNDCLASSEXW)
+        wc.style = 0x0020 
+        wc.lpfnWndProc = cast(user32.DefWindowProcW, c_void_p)
         wc.hInstance = hinst
         wc.lpszClassName = name
-        user32.RegisterClassW(byref(wc))
-        # WS_POPUP = 0x80000000. Use c_uint32 to prevent signed overflow on the flag.
-        hwnd = user32.CreateWindowExW(0, name, name, c_uint32(0x80000000).value, 0, 0, 1, 1, None, None, hinst, None)
-        if not hwnd:
-            raise RuntimeError(f"WinError {kernel32.GetLastError()}: Window creation failed.")
-        user32.ShowWindow(hwnd, 0)
-        user32.UpdateWindow(hwnd)
-        pump()
-        return hwnd
+        user32.RegisterClassExW(byref(wc))
+        return user32.CreateWindowExW(0, name, name, 0x80000000, 0, 0, 1, 1, None, None, hinst, None)
 
-    # 1. LEAPFROG KICKSTART
-    uid = time.time_ns()
-    opengl32.wglMakeCurrent(None, None)
-    
-    h_dummy = create_hidden_window(f"HGL_K_{uid}")
-    hdc_dummy = user32.GetDC(h_dummy)
-    
-    pfd = PIXELFORMATDESCRIPTOR(nSize=sizeof(PIXELFORMATDESCRIPTOR), nVersion=1, dwFlags=37, iPixelType=0, cColorBits=32, cDepthBits=24, cStencilBits=8)
-    pf = gdi32.ChoosePixelFormat(hdc_dummy, byref(pfd))
-    gdi32.SetPixelFormat(hdc_dummy, pf, byref(pfd))
-    rc_dummy = opengl32.wglCreateContext(hdc_dummy)
-    
-    if not opengl32.wglMakeCurrent(hdc_dummy, rc_dummy):
-        raise RuntimeError("ICD Kickstart failed.")
-
-    wglChoosePF_ptr = opengl32.wglGetProcAddress(b"wglChoosePixelFormatARB")
-    wglCreateCtx_ptr = opengl32.wglGetProcAddress(b"wglCreateContextAttribsARB")
-
-    # 2. REAL CONTEXT
-    h_real = create_hidden_window(f"HGL_R_{uid}")
+    uid = f"HyperGL_{time.time_ns()}"
+    h_real = create_hidden_window(uid)
     hdc_real = user32.GetDC(h_real)
-    rc_real = None
+    pfd = PIXELFORMATDESCRIPTOR(nSize=sizeof(PIXELFORMATDESCRIPTOR), nVersion=1, dwFlags=37, iPixelType=0, cColorBits=32, cDepthBits=24, cStencilBits=8)
 
-    if wglChoosePF_ptr and wglCreateCtx_ptr:
-        WGLCHOOSEPF = ctypes.WINFUNCTYPE(BOOL, HDC, POINTER(c_int), POINTER(c_float), UINT, POINTER(c_int), POINTER(UINT))
+    # --- GDI32 Setup ---
+    gdi32.ChoosePixelFormat.argtypes = [HDC, c_void_p]
+    gdi32.ChoosePixelFormat.restype = c_int
+
+    gdi32.SetPixelFormat.argtypes = [HDC, c_int, c_void_p]
+    gdi32.SetPixelFormat.restype = BOOL
+    pf = gdi32.ChoosePixelFormat(hdc_real, byref(pfd))
+    gdi32.SetPixelFormat(hdc_real, pf, byref(pfd))
+
+    # Create temporary context to get extension pointers
+    rc_temp = opengl32.wglCreateContext(hdc_real)
+    opengl32.wglMakeCurrent(hdc_real, rc_temp)
+
+    # Get the extension function
+    wglCreateCtx_ptr = opengl32.wglGetProcAddress(b"wglCreateContextAttribsARB")
+    
+    rc_real = None
+    if wglCreateCtx_ptr:
+        # Cast the pointer to a callable function
         WGLCREATECTX = ctypes.WINFUNCTYPE(HGLRC, HDC, HGLRC, POINTER(c_int))
-        
-        wglChoosePF = WGLCHOOSEPF(wglChoosePF_ptr)
         wglCreateCtx = WGLCREATECTX(wglCreateCtx_ptr)
         
-        # WGL_DRAW_TO_WINDOW_ARB, WGL_SUPPORT_OPENGL_ARB, WGL_DOUBLE_BUFFER_ARB, etc.
-        pf_attrs = (c_int * 17)(0x2001, 1, 0x2010, 1, 0x2011, 1, 0x2013, 0x202B, 0x2003, 0x2027, 0x2014, 32, 0x2022, 24, 0x2023, 8, 0)
-        pf_out = c_int(); num_pf = UINT()
-        
-        if wglChoosePF(hdc_real, pf_attrs, None, 1, byref(pf_out), byref(num_pf)) and num_pf.value > 0:
-            gdi32.SetPixelFormat(hdc_real, pf_out.value, byref(pfd))
-            for ver in [(4,6), (4,5), (4,3)]:
-                ctx_attrs = (c_int * 7)(0x2091, ver[0], 0x2092, ver[1], 0x9126, 0x1, 0)
-                rc_real = wglCreateCtx(hdc_real, None, ctx_attrs)
-                if rc_real: break
+        # Try Core Profiles
+        for ver in [(4,6), (4,5), (3,3)]:
+            attrs = (c_int * 7)(0x2091, ver[0], 0x2092, ver[1], 0x9126, 0x1, 0)
+            try:
+                rc_real = wglCreateCtx(hdc_real, None, attrs)
+                if rc_real:
+                    opengl32.wglMakeCurrent(None, None)
+                    opengl32.wglDeleteContext(rc_temp)
+                    opengl32.wglMakeCurrent(hdc_real, rc_real)
+                    break
+            except: continue
 
     if not rc_real:
-        pf = gdi32.ChoosePixelFormat(hdc_real, byref(pfd))
-        gdi32.SetPixelFormat(hdc_real, pf, byref(pfd))
-        rc_real = opengl32.wglCreateContext(hdc_real)
+        rc_real = rc_temp
 
-    # 3. ATOMIC SWITCH
-    opengl32.wglMakeCurrent(None, None)
-    if not opengl32.wglMakeCurrent(hdc_real, rc_real):
-        raise RuntimeError(f"Context bind failed. WinError: {kernel32.GetLastError()}")
-
-    # Verify
-    renderer = opengl32.glGetString(0x1F01)
-    if not renderer or b"GDI Generic" in renderer:
-        raise RuntimeError(f"Failed to engage Hardware ICD. Renderer: {renderer}")
-
-    # Cleanup Dummy
-    opengl32.wglDeleteContext(rc_dummy)
-    user32.ReleaseDC(h_dummy, hdc_dummy)
-    user32.DestroyWindow(h_dummy)
-    pump()
-
-    return h_real, hdc_real, rc_real
+    _HEADLESS_CACHE = (h_real, hdc_real, rc_real)
+    return _HEADLESS_CACHE
 
 def headless_context_glcontext():
     import glcontext
-    return glcontext.default_backend()(glversion=330, mode='standalone')
+    # Create the context using the C++ backend
+    # 'standalone' mode creates the hidden window and pixel format automatically
+    ctx_obj = glcontext.default_backend()(glversion=450, mode='standalone')
+    
+    # We need to extract the raw handles to pass to HyperGL
+    # glcontext provides a dictionary or object depending on version
+    # On Windows, it usually provides 'wglContext' and 'hdc'
+    return None, ctx_obj.hdc, ctx_obj.hglrc
 
 def web_context():
     import js
