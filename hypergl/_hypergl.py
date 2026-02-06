@@ -6,6 +6,7 @@ import struct
 import re
 import textwrap
 import os
+import contextlib
 import atexit
 
 try:
@@ -921,18 +922,121 @@ def validate(interface, layout, resources, vertex_buffers, info):
         else:
             raise ValueError(f'Invalid resource type "{resource_type}"')
 
+
+class SceneCompiler:
+    """
+    High-level compiler for the Command Buffer VM.
+    Translates Python context managers into GOTO, LABEL, and JUMP bytecode.
+    """
+    def __init__(self, cb):
+        self.cb = cb
+        self._counter = 0
+
+    def _get_unique_label(self, prefix: str):
+        self._counter += 1
+        return f"__hgl_{prefix}_{self._counter}"
+
+    @contextlib.contextmanager
+    def loop(self, reg: int, count: int | None = None):
+        """
+        Bytecode Construct: FOR LOOP
+        Repeats the block 'count' times using register i[reg] as the counter.
+        """
+        if count is not None:
+            self.cb.set_iter(reg, count)
+        
+        start_label = self._get_unique_label("loop_start")
+        self.cb.label(start_label)
+        yield
+        self.cb.jump_iter(reg, start_label)
+
+    @contextlib.contextmanager
+    def condition(self, buffer, offset: int, invert: bool = False):
+        """
+        Bytecode Construct: IF (Memory-based)
+        Skips the block if a value in GPU memory is 0 (or not 0).
+        """
+        exit_label = self._get_unique_label("cond_exit")
+        if invert:
+            self.cb.skip_if_not_zero(buffer, offset)
+        else:
+            self.cb.skip_if_zero(buffer, offset)
+            
+        self.cb.goto(exit_label)
+        yield
+        self.cb.label(exit_label)
+
+    @contextlib.contextmanager
+    def reg_condition(self, reg: int, invert: bool = False):
+        """
+        Bytecode Construct: IF (Register-based)
+        Skips the block if register i[reg] is 0 (or not 0).
+        Useful after performing ALU operations.
+        """
+        exit_label = self._get_unique_label("reg_cond_exit")
+        if invert:
+            self.cb.skip_reg_not_zero(reg)
+        else:
+            self.cb.skip_reg_zero(reg)
+            
+        self.cb.goto(exit_label)
+        yield
+        self.cb.label(exit_label)
+    @contextlib.contextmanager
+    def scope(self, registers: list[int]):
+        """
+        Saves the specified registers on the stack and restores them 
+        when the block exits. Prevents side effects in subroutines.
+        """
+        for r in registers:
+            self.cb.push(r)
+        
+        yield
+        
+        # Pop in reverse order!
+        for r in reversed(registers):
+            self.cb.pop(r)
+
+def subroutine(func):
+    """
+    Decorator for Command Buffer Subroutines.
+    Records the function into a persistent child buffer on first use.
+    Subsequent calls from a main buffer emit a C-level 'CMD_CALL'.
+    """
+    def wrapper(cb, *args, **kwargs):
+        # We use a dictionary to cache buffers per Context.
+        # This prevents using a buffer from Context A in Context B.
+        if not hasattr(func, "_hgl_cache"):
+            func._hgl_cache = {}
+
+        # cb.ctx is a C object, so we use its memory address as a unique key
+        ctx_id = hash(cb.ctx) 
+        
+        if ctx_id not in func._hgl_cache:
+            # Create a child buffer for this specific context
+            sub_cb = cb.ctx.command_buffer()
+            sub_cb.begin()
+            func(sub_cb, *args, **kwargs)
+            sub_cb.end()
+            func._hgl_cache[ctx_id] = sub_cb
+
+        # Emit the C subroutine call
+        cb.call(func._hgl_cache[ctx_id])
+        
+    return wrapper
+
 # Explicitly export functions to make them available to hypergl.c
 __all__ = [
     'loader', 'calcsize', 'bind', 'vertex_array_bindings', 'resource_bindings', 
     'framebuffer_attachments', 'settings', 'program', 'compile_error', 'linker_error', 
-    'uniforms', 'layout_bindings', 'validate'
+    'uniforms', 'layout_bindings', 'validate', 'SceneCompiler', 'subroutine'
 ]
 
 def _clean_exit():
     """
     Forces a hard exit to bypass Python's garbage collection sequence.
     This prevents segfaults caused by C-level free-threading/locking issues
-    during interpreter shutdown.
+    during interpreter shutdown. Currently reserved, but this is a last resort.
     """
     try:
         sys.stdout.flush()
