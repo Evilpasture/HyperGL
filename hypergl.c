@@ -6371,6 +6371,23 @@ static Fence *Context_meth_fence(Context *self, PyObject *args) {
     return res;
 }
 
+static PyObject *Context_meth_command_buffer(Context *self, PyObject *args) {
+    CommandBuffer *cmd = PyObject_GC_New(CommandBuffer, self->module_state->CommandBuffer_type);
+    if (!cmd) return NULL;
+    // Init manually since we bypassed __new__ logic for custom setup
+    cmd->ctx = self; Py_INCREF(self);
+    cmd->size = 0;
+    cmd->capacity = 4096;
+    cmd->data = PyMem_Malloc(cmd->capacity);
+    cmd->ref_list = PyList_New(0);
+    cmd->recording = 1;
+    if (!cmd->data || !cmd->ref_list) {
+        Py_DECREF(cmd); return PyErr_NoMemory();
+    }
+    PyObject_GC_Track(cmd);
+    return (PyObject *)cmd;
+}
+
 static PyObject *meth_inspect(PyObject *self, PyObject *arg) {
   const ModuleState *module_state = (ModuleState *)PyModule_GetState(self);
 
@@ -6877,6 +6894,318 @@ static int Fence_clear(Fence *self) {
 }
 
 // -----------------------------------------------------------------------------
+// Type: CommandBuffer
+// -----------------------------------------------------------------------------
+
+static int CommandBuffer_ensure(CommandBuffer *self, size_t needed) {
+    if (self->size + needed <= self->capacity) {
+        return 0;
+    }
+    size_t new_cap = (self->capacity * 2) + needed;
+    uint8_t *new_data = PyMem_Realloc(self->data, new_cap);
+    if (!new_data) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    self->data = new_data;
+    self->capacity = new_cap;
+    return 0;
+}
+
+static void CommandBuffer_push_ref(CommandBuffer *self, PyObject *obj) {
+    if (obj) {
+        PyList_Append(self->ref_list, obj);
+    }
+}
+
+static PyObject *CommandBuffer_meth_bind_pipeline(CommandBuffer *self, PyObject *args) {
+    PyObject *obj;
+    if (!PyArg_ParseTuple(args, "O!", self->ctx->module_state->Pipeline_type, &obj)) return NULL;
+    
+    if (CommandBuffer_ensure(self, sizeof(CmdBindPipeline)) < 0) return NULL;
+    
+    CmdBindPipeline *cmd = (CmdBindPipeline *)(self->data + self->size);
+    cmd->header.type = CMD_BIND_PIPELINE;
+    cmd->header.size = sizeof(CmdBindPipeline);
+    cmd->pipeline = (Pipeline *)obj;
+    
+    CommandBuffer_push_ref(self, obj);
+    self->size += sizeof(CmdBindPipeline);
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_bind_compute(CommandBuffer *self, PyObject *args) {
+    PyObject *obj;
+    if (!PyArg_ParseTuple(args, "O!", self->ctx->module_state->Compute_type, &obj)) return NULL;
+    
+    if (CommandBuffer_ensure(self, sizeof(CmdBindCompute)) < 0) return NULL;
+    
+    CmdBindCompute *cmd = (CmdBindCompute *)(self->data + self->size);
+    cmd->header.type = CMD_BIND_COMPUTE;
+    cmd->header.size = sizeof(CmdBindCompute);
+    cmd->compute = (Compute *)obj;
+    
+    CommandBuffer_push_ref(self, obj);
+    self->size += sizeof(CmdBindCompute);
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_clear(CommandBuffer *self, PyObject *args) {
+    int mask = GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
+    if (!PyArg_ParseTuple(args, "|i", &mask)) return NULL;
+
+    if (CommandBuffer_ensure(self, sizeof(CmdClear)) < 0) return NULL;
+    CmdClear *cmd = (CmdClear *)(self->data + self->size);
+    cmd->header.type = CMD_CLEAR;
+    cmd->header.size = sizeof(CmdClear);
+    cmd->mask = mask;
+    self->size += sizeof(CmdClear);
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_bind_descriptor_set(CommandBuffer *self, PyObject *args) {
+    PyObject *obj;
+    if (!PyArg_ParseTuple(args, "O!", self->ctx->module_state->DescriptorSet_type, &obj)) return NULL;
+    
+    if (CommandBuffer_ensure(self, sizeof(CmdBindDescriptorSet)) < 0) return NULL;
+    CmdBindDescriptorSet *cmd = (CmdBindDescriptorSet *)(self->data + self->size);
+    cmd->header.type = CMD_BIND_DESCRIPTOR_SET;
+    cmd->header.size = sizeof(CmdBindDescriptorSet);
+    cmd->set = (DescriptorSet *)obj;
+    
+    CommandBuffer_push_ref(self, obj);
+    self->size += cmd->header.size;
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_draw(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
+    static char *kw[] = {"vertex_count", "instance_count", "first", NULL};
+    int vc = -1, ic = -1, first = -1;
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|iii", kw, &vc, &ic, &first)) return NULL;
+    
+    if (CommandBuffer_ensure(self, sizeof(CmdDraw)) < 0) return NULL;
+    CmdDraw *cmd = (CmdDraw *)(self->data + self->size);
+    cmd->header.type = CMD_DRAW;
+    cmd->header.size = sizeof(CmdDraw);
+    cmd->vertex_count = vc;
+    cmd->instance_count = ic;
+    cmd->first = first;
+    self->size += cmd->header.size;
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_draw_indirect(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
+    static char *kw[] = {"buffer", "count", "offset", "stride", NULL};
+    PyObject *buf_obj;
+    int count = 1, offset = 0, stride = 0;
+    
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O!|iii", kw, 
+        self->ctx->module_state->Buffer_type, &buf_obj, &count, &offset, &stride)) return NULL;
+
+    if (CommandBuffer_ensure(self, sizeof(CmdDrawIndirect)) < 0) return NULL;
+    CmdDrawIndirect *cmd = (CmdDrawIndirect *)(self->data + self->size);
+    cmd->header.type = CMD_DRAW_INDIRECT;
+    cmd->header.size = sizeof(CmdDrawIndirect);
+    cmd->buffer = (Buffer *)buf_obj;
+    cmd->count = count;
+    cmd->offset = offset;
+    cmd->stride = stride;
+
+    CommandBuffer_push_ref(self, buf_obj);
+    self->size += sizeof(CmdDrawIndirect);
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_dispatch(CommandBuffer *self, PyObject *args) {
+    int x, y, z;
+    if (!PyArg_ParseTuple(args, "iii", &x, &y, &z)) return NULL;
+    if (CommandBuffer_ensure(self, sizeof(CmdDispatch)) < 0) return NULL;
+    CmdDispatch *cmd = (CmdDispatch *)(self->data + self->size);
+    cmd->header.type = CMD_DISPATCH;
+    cmd->header.size = sizeof(CmdDispatch);
+    cmd->x = x; cmd->y = y; cmd->z = z;
+    self->size += sizeof(CmdDispatch);
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_barrier(CommandBuffer *self, PyObject *args) {
+    int flags = GL_ALL_BARRIER_BITS;
+    if (!PyArg_ParseTuple(args, "|i", &flags)) return NULL;
+    if (CommandBuffer_ensure(self, sizeof(CmdBarrier)) < 0) return NULL;
+    CmdBarrier *cmd = (CmdBarrier *)(self->data + self->size);
+    cmd->header.type = CMD_BARRIER;
+    cmd->header.size = sizeof(CmdBarrier);
+    cmd->flags = flags;
+    self->size += sizeof(CmdBarrier);
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_submit(CommandBuffer *self, PyObject *args) {
+    if (self->ctx->is_lost) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Context lost");
+        return NULL;
+    }
+
+    Pipeline *active_pipe = NULL;
+    Compute *active_compute = NULL;
+    Context *ctx = self->ctx;
+
+    Py_BEGIN_ALLOW_THREADS
+    PyMutex_Lock(&ctx->state_lock);
+
+    uint8_t *ptr = self->data;
+    uint8_t *end = ptr + self->size;
+
+    while (ptr < end) {
+        if (ptr + sizeof(CmdHeader) > end) {
+            break; 
+        }
+        CmdHeader *header = (CmdHeader *)ptr;
+
+        if (header->size < sizeof(CmdHeader) || ptr + header->size > end) {
+            // Bytecode is corrupted or malicious. Stop immediately.
+#ifdef DEBUG
+            fprintf(stderr, "[HyperGL] CommandBuffer Corrupted: size %u at offset %tu\n", 
+                    header->size, ptr - self->data);
+#endif
+            break; 
+        }
+        
+        switch (header->type) {
+            case CMD_BIND_PIPELINE: {
+                CmdBindPipeline *c = (CmdBindPipeline *)ptr;
+                active_pipe = c->pipeline;
+                active_compute = NULL;
+                
+                bind_viewport_internal(ctx, &active_pipe->viewport);
+                bind_global_settings_internal(ctx, active_pipe->global_settings);
+                
+                int fbo_id = active_pipe->framebuffer ? active_pipe->framebuffer->obj : ctx->default_framebuffer->obj;
+                bind_draw_framebuffer_internal(ctx, fbo_id);
+                
+                bind_program_internal(ctx, active_pipe->program->obj);
+                bind_vertex_array_internal(ctx, active_pipe->vertex_array->obj);
+                bind_descriptor_set_internal(ctx, active_pipe->descriptor_set);
+                if (active_pipe->uniforms) bind_uniforms(active_pipe);
+                break;
+            }
+            case CMD_BIND_COMPUTE: {
+                CmdBindCompute *c = (CmdBindCompute *)ptr;
+                active_compute = c->compute;
+                active_pipe = NULL;
+                
+                bind_program_internal(ctx, active_compute->program->obj);
+                bind_descriptor_set_internal(ctx, active_compute->descriptor_set);
+                if (active_compute->uniforms) bind_uniforms((Pipeline*)active_compute);
+                break;
+            }
+            case CMD_BIND_DESCRIPTOR_SET: {
+                CmdBindDescriptorSet *c = (CmdBindDescriptorSet *)ptr;
+                bind_descriptor_set_internal(ctx, c->set);
+                break;
+            }
+            case CMD_CLEAR: {
+                CmdClear *c = (CmdClear *)ptr;
+                glClear(c->mask);
+                break;
+            }
+            case CMD_DRAW: {
+                if (active_pipe) {
+                    CmdDraw *c = (CmdDraw *)ptr;
+                    int vc = (c->vertex_count >= 0) ? c->vertex_count : active_pipe->params.vertex_count;
+                    int ic = (c->instance_count >= 0) ? c->instance_count : active_pipe->params.instance_count;
+                    int first = (c->first >= 0) ? c->first : active_pipe->params.first_vertex;
+                    
+                    if (active_pipe->index_type) {
+                        intptr off = (intptr)first * (intptr)active_pipe->index_size;
+                        glDrawElementsInstanced(active_pipe->topology, vc, active_pipe->index_type, off, ic);
+                    } else {
+                        glDrawArraysInstanced(active_pipe->topology, first, vc, ic);
+                    }
+                }
+                break;
+            }
+            case CMD_DRAW_INDIRECT: {
+                if (active_pipe) {
+                    CmdDrawIndirect *c = (CmdDrawIndirect *)ptr;
+                    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, c->buffer->buffer);
+                    int s = c->stride != 0 ? c->stride : (active_pipe->index_type ? sizeof(DrawElementsIndirectCommand) : sizeof(DrawArraysIndirectCommand));
+                    void* off = (void*)(intptr_t)c->offset;
+                    
+                    // Auto-Barrier for Compute->Indirect feedback loops
+                    glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+
+                    if (active_pipe->index_type) {
+                        glMultiDrawElementsIndirect(active_pipe->topology, active_pipe->index_type, off, c->count, s);
+                    } else {
+                        glMultiDrawArraysIndirect(active_pipe->topology, off, c->count, s);
+                    }
+                }
+                break;
+            }
+            case CMD_DISPATCH: {
+                CmdDispatch *c = (CmdDispatch *)ptr;
+                glDispatchCompute(c->x, c->y, c->z);
+                break;
+            }
+            case CMD_BARRIER: {
+                CmdBarrier *c = (CmdBarrier *)ptr;
+                glMemoryBarrier(c->flags);
+                break;
+            }
+            default: 
+                ptr = end; // Exit loop on corruption
+                break;
+        }
+        
+        // Single point of advancement
+        ptr += header->size;
+    }
+
+    PyMutex_Unlock(&ctx->state_lock);
+    Py_END_ALLOW_THREADS
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
+    CommandBuffer *self = (CommandBuffer *)type->tp_alloc(type, 0);
+    if (self) {
+        self->size = 0;
+        self->capacity = 4096; // 4KB start
+        self->data = PyMem_Malloc(self->capacity);
+        self->ref_list = PyList_New(0);
+        self->recording = 1;
+        if (!self->data || !self->ref_list) {
+            Py_DECREF(self);
+            return PyErr_NoMemory();
+        }
+        PyObject_GC_Track(self); 
+    }
+    return (PyObject *)self;
+}
+
+static void CommandBuffer_dealloc(CommandBuffer *self) {
+    PyObject_GC_UnTrack(self);
+    if (self->data) PyMem_Free(self->data);
+    Py_XDECREF(self->ref_list);
+    Py_XDECREF(self->ctx);
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+
+static int CommandBuffer_traverse(CommandBuffer *self, visitproc visit, void *arg) {
+    Py_VISIT(self->ref_list);
+    Py_VISIT(self->ctx);
+    return 0;
+}
+
+static int CommandBuffer_clear(CommandBuffer *self) {
+    Py_CLEAR(self->ref_list);
+    Py_CLEAR(self->ctx);
+    return 0;
+}
+
+// -----------------------------------------------------------------------------
 // Python Module Definitions
 // -----------------------------------------------------------------------------
 
@@ -6899,6 +7228,7 @@ static PyMethodDef Context_methods[] = {
     {"migrate", (PyCFunction)Context_meth_migrate, METH_NOARGS, NULL},
     {"release_thread", (PyCFunction)Context_meth_release_thread, METH_NOARGS, NULL},
     {"fence", (PyCFunction)Context_meth_fence, METH_NOARGS, NULL},
+    {"command_buffer", (PyCFunction)Context_meth_command_buffer, METH_NOARGS, NULL},
     {NULL, NULL, 0, NULL},
 };
 
@@ -7031,6 +7361,19 @@ static PyMethodDef Fence_methods[] = {
     {0},
 };
 
+static PyMethodDef CommandBuffer_methods[] = {
+    {"bind_pipeline", (PyCFunction)CommandBuffer_meth_bind_pipeline, METH_VARARGS, NULL},
+    {"bind_compute", (PyCFunction)CommandBuffer_meth_bind_compute, METH_VARARGS, NULL},
+    {"bind_descriptor_set", (PyCFunction)CommandBuffer_meth_bind_descriptor_set, METH_VARARGS, NULL},
+    {"clear", (PyCFunction)CommandBuffer_meth_clear, METH_VARARGS, NULL},
+    {"draw", (PyCFunction)CommandBuffer_meth_draw, METH_VARARGS | METH_KEYWORDS, NULL},
+    {"draw_indirect", (PyCFunction)CommandBuffer_meth_draw_indirect, METH_VARARGS | METH_KEYWORDS, NULL},
+    {"dispatch", (PyCFunction)CommandBuffer_meth_dispatch, METH_VARARGS, NULL},
+    {"barrier", (PyCFunction)CommandBuffer_meth_barrier, METH_VARARGS, NULL},
+    {"submit", (PyCFunction)CommandBuffer_meth_submit, METH_NOARGS, NULL},
+    {NULL}
+};
+
 // -----------------------------------------------------------------------------
 // Type Slots & Specs
 // -----------------------------------------------------------------------------
@@ -7120,6 +7463,15 @@ static PyType_Slot Fence_slots[] = {
     {0},
 };
 
+static PyType_Slot CommandBuffer_slots[] = {
+    {Py_tp_new, CommandBuffer_new},
+    {Py_tp_dealloc, CommandBuffer_dealloc},
+    {Py_tp_traverse, CommandBuffer_traverse},
+    {Py_tp_clear, CommandBuffer_clear},
+    {Py_tp_methods, CommandBuffer_methods},
+    {0}
+};
+
 static PyType_Spec Context_spec = {"hypergl.Context", sizeof(Context), 0,
                                    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
                                    Context_slots};
@@ -7153,6 +7505,11 @@ static PyType_Spec Fence_spec = {
     "hypergl.Fence", sizeof(Fence), 0,
     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
     Fence_slots
+};
+
+static PyType_Spec CommandBuffer_spec = {
+    "hypergl.CommandBuffer", sizeof(CommandBuffer), 0,
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, CommandBuffer_slots
 };
 
 // -----------------------------------------------------------------------------
@@ -7210,6 +7567,7 @@ static int module_exec(PyObject *self) {
   CREATE_TYPE(GlobalSettings_type, GlobalSettings_spec);
   CREATE_TYPE(GLObject_type, GLObject_spec);
   CREATE_TYPE(Fence_type, Fence_spec);
+  CREATE_TYPE(CommandBuffer_type, CommandBuffer_spec);
 
 #undef CREATE_TYPE
 
@@ -7221,6 +7579,7 @@ static int module_exec(PyObject *self) {
   PyModule_AddObject(self, "Pipeline", new_ref(state->Pipeline_type));
   PyModule_AddObject(self, "Compute", new_ref(state->Compute_type));
   PyModule_AddObject(self, "Fence", new_ref(state->Fence_type));
+  PyModule_AddObject(self, "CommandBuffer", new_ref(state->CommandBuffer_type));
 
   PyObject *loader = PyObject_GetAttrString(state->helper, "loader");
   if (loader) {
