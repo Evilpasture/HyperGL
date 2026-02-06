@@ -62,3 +62,11 @@ If you get `ValueError: Missing resource for "u_tex" with binding 0`:
 1.  **Check Layout:** Did you define `{'name': 'u_tex', 'binding': 0}` in `layout`?
 2.  **Check Resources:** Did you define `{'type': 'sampler', 'binding': 0, 'image': img}` in `resources`?
 3.  **Check Indices:** Do the binding numbers match? (0 -> 0).
+
+## Active vs. Inactive Attributes
+Just like Uniforms, **Vertex Attributes** are subject to dead code elimination. 
+
+*   **Uniforms:** Result in `KeyError` or `ValueError: Missing resource`.
+*   **Attributes:** Result in `ValueError: Invalid vertex attribute location`.
+
+HyperGL requires a **1:1 match** between your `vertex_buffers` list and the active inputs in your shader. This prevents the common mistake of thinking a buffer is being used when the shader is actually ignoring it.
