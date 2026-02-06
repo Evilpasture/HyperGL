@@ -1624,7 +1624,10 @@ static DescriptorSet *build_descriptor_set(Context *self, PyObject *bindings) {
   if (!res) {
     return NULL;
   }
-  zeromem(res, sizeof(*res));
+  res->uses = 1;
+  zeromem(&res->uniform_buffers, sizeof(DescriptorSetBuffers));
+  zeromem(&res->storage_buffers, sizeof(DescriptorSetBuffers));
+  zeromem(&res->samplers, sizeof(DescriptorSetSamplers));
 
   res->uniform_buffers =
       build_descriptor_set_buffers(self, PyTuple_GetItem(bindings, 0));
