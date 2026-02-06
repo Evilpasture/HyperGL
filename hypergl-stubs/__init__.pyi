@@ -1,7 +1,7 @@
 # MIT License
 # Copyright (c) 2024 Szabolcs Dombi
 
-from typing import Any, Dict, Iterable, List, Literal, Protocol, Tuple, TypedDict
+from typing import Any, Dict, Iterable, List, Literal, Protocol, Tuple, TypedDict, Optional, Union, Iterator, Callable, TypeVar, ParamSpec
 
 # --- Enums and Literals ---
 
@@ -306,70 +306,131 @@ class Fence:
         """
         ...
 
-class CommandBuffer:
+# --- High-Level Compiler Types ---
+
+class SceneCompiler:
     """
-    A recorded sequence of OpenGL commands that can be replayed at C-speed.
-    
-    Command Buffers allow you to 'bake' your render logic once and execute it 
-    entirely within a C loop, bypassing Python interpreter overhead and 
-    releasing the GIL during the draw phase.
+    High-level compiler for the Command Buffer VM.
+    Translates Python context managers into GOTO, LABEL, and JUMP bytecode.
     """
+    def __init__(self, cb: CommandBuffer) -> None: ...
 
-    def bind_pipeline(self, pipeline: Pipeline) -> None:
+    def loop(self, reg: int, count: Optional[int] = None) -> Iterator[None]:
         """
-        Binds a graphics pipeline (Shaders, VAO, FBO, and Blend/Depth state).
-        Subsequent draw calls will use this state.
+        Bytecode Construct: FOR LOOP
+        Repeats the block 'count' times using register i[reg] as the counter.
+        
+        Example:
+            with sc.loop(reg=0, count=100):
+                cb.draw()
         """
         ...
 
-    def bind_compute(self, compute: Compute) -> None:
+    def condition(self, buffer: Buffer, offset: int, invert: bool = False) -> Iterator[None]:
         """
-        Binds a compute pipeline. Subsequent dispatch calls will use this state.
-        """
-        ...
-
-    def bind_descriptor_set(self, descriptor_set: DescriptorSet) -> None:
-        """
-        Swaps resource bindings (Textures, UBOs, SSBOs) without changing 
-        the active pipeline. Ideal for high-performance material swapping.
-        """
-        ...
-
-    def clear(self, mask: int = 0x4100 | 0x0400) -> None:
-        """
-        Clears the currently bound framebuffer.
-        Default mask is GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT.
-        """
-        ...
-
-    def draw(self, vertex_count: int = -1, instance_count: int = -1, first: int = -1) -> None:
-        """
-        Issues a non-indexed or indexed draw call based on the bound pipeline.
+        Bytecode Construct: IF (Memory-based)
+        Skips the block if a uint32 value in GPU memory is 0 (or not 0).
         
         Args:
-            vertex_count: Number of vertices. If -1, uses Pipeline.vertex_count.
-            instance_count: Number of instances. If -1, uses Pipeline.instance_count.
-            first: Start vertex or index offset. If -1, uses Pipeline.first_vertex.
+            buffer: A MAPPED SSBO buffer.
+            offset: Byte offset to a uint32 value.
+            invert: If True, skips if value is NOT zero.
         """
         ...
 
-    def draw_indirect(self, buffer: Buffer, count: int = 1, offset: int = 0, stride: int = 0) -> None:
+    def reg_condition(self, reg: int, invert: bool = False) -> Iterator[None]:
         """
-        Issues a Multi-Draw Indirect (MDI) call using commands stored in a GPU buffer.
-        Automatically issues a memory barrier to ensure previous compute writes are visible.
+        Bytecode Construct: IF (Register-based)
+        Skips the block if internal VM register i[reg] is 0 (or not 0).
+        Useful for branching after ALU operations.
+        
+        Example:
+            cmd.alu(0, 1, 'sub')
+            with sc.reg_condition(reg=0):
+                cmd.print("Values are equal")
+        """
+        ...
+    def scope(self, registers: List[int]) -> Iterator[None]:
+        """
+        High-level Construct: REGISTER SCOPE
+        
+        Automatically PUSHes the provided list of registers onto the stack 
+        before entering the block, and POPs them in reverse order upon exiting.
+        
+        This is the standard way to ensure a subroutine doesn't accidentally 
+        overwrite registers used by the caller.
+        
+        Example:
+            with sc.scope([0, 1, 2]):
+                # Use i0, i1, i2 freely here
+                cmd.set_iter(0, 100)
+            # i0, i1, i2 are now back to their original values
         """
         ...
 
-    def dispatch(self, x: int, y: int, z: int) -> None:
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def subroutine(func: Callable[P, R]) -> Callable[P, R]:
+    """
+    Decorator for Command Buffer Subroutines.
+    
+    Records the decorated function into a persistent child CommandBuffer on first use.
+    Subsequent calls from a main buffer emit a high-speed C-level 'CMD_CALL'.
+    
+    Features:
+        - Context Isolation: Automatically caches separate buffers per OpenGL context.
+        - Hardware Inheritance: Child buffers inherit parent Pipeline/Compute state.
+        - Register Persistence: i0-i7 registers are shared between caller and subroutine.
+    
+    Note:
+        The decorated function must accept a CommandBuffer as its first argument.
+    """
+    ...
+
+class CommandBuffer:
+    """
+    A high-performance C-side bytecode Virtual Machine for OpenGL commands.
+    
+    Command Buffers allow you to 'record' a sequence of rendering and compute instructions
+    once and 'replay' them at C-speed. This bypasses Python interpreter overhead, 
+    eliminates the "boundary tax" of calling C-functions from Python loops, and 
+    enables Zero-GIL rendering.
+
+    Lifecycle:
+        1. begin(): Resets the buffer and starts recording.
+        2. Record instructions (draw, dispatch, skip, etc.)
+        3. end(): Finalizes the buffer and patches labels/jumps.
+        4. submit(): Executes the sequence on the GPU thread.
+    """
+
+    def begin(self) -> None:
         """
-        Dispatches the currently bound compute shader with the given workgroup dimensions.
+        Resets the command buffer to an empty state and opens it for recording.
+        All previously recorded instructions and labels are cleared.
         """
         ...
 
-    def barrier(self, flags: int = 0xFFFFFFFF) -> None:
+    def end(self) -> None:
         """
-        Issues a glMemoryBarrier. Default is GL_ALL_BARRIER_BITS.
-        Ensures memory writes (like Compute SSBOs) are visible to subsequent commands.
+        Finalizes the recording. This phase resolves all 'label' offsets and 
+        'goto' targets. Once closed, instructions cannot be added until begin() 
+        is called again.
+        """
+        ...
+
+    def nop(self, size: int = 8) -> None:
+        """
+        Bytecode Instruction: NOP
+        A no-operation instruction. Can be used to reserve space in the buffer.
+        """
+        ...
+
+    def erase(self, offset: int) -> None:
+        """
+        Overwrites the instruction at 'offset' with a NOP.
+        This effectively 'mutes' the instruction without changing the buffer size 
+        or breaking label offsets. Use with tell() to find offsets.
         """
         ...
 
@@ -377,9 +438,301 @@ class CommandBuffer:
         """
         Executes the recorded bytecode sequence in a tight C loop.
         
-        This method releases the GIL, allowing other Python threads (like Physics 
-        or AI) to run in parallel while the GPU is being fed. Submission must 
-        happen on the thread that owns the OpenGL context.
+        This method releases the Global Interpreter Lock (GIL), allowing other 
+        Python threads to run in parallel. It checks for Python signals (Ctrl+C) 
+        every 1024 instructions to ensure infinite loops can be interrupted.
+
+        Note:
+            Must be called on the thread that owns the OpenGL context.
+        """
+        ...
+
+    def bind_pipeline(self, pipeline: Pipeline) -> None:
+        """
+        Bytecode Instruction: BIND_PIPELINE
+        
+        Binds a graphics pipeline state (Shaders, VAO, FBO, Blend/Depth state).
+        Subsequent draw calls will inherit this state.
+        """
+        ...
+
+    def bind_compute(self, compute: Compute) -> None:
+        """
+        Bytecode Instruction: BIND_COMPUTE
+        
+        Binds a compute pipeline. Subsequent dispatch calls will use this state.
+        """
+        ...
+
+    def bind_descriptor_set(self, descriptor_set: DescriptorSet) -> None:
+        """
+        Bytecode Instruction: BIND_DESCRIPTOR_SET
+        
+        Fast-swaps resource bindings (Textures, UBOs, SSBOs) without changing 
+        the active pipeline. This is the optimal path for material swapping.
+        """
+        ...
+
+    def clear(self, mask: int = 0x4100 | 0x0400) -> None:
+        """
+        Bytecode Instruction: CLEAR
+        
+        Clears the currently bound framebuffer using the specified bitmask.
+        Default is Color + Depth + Stencil.
+        """
+        ...
+
+    def draw(self, vertex_count: int = -1, instance_count: int = -1, first: int = -1) -> None:
+        """
+        Bytecode Instruction: DRAW
+        
+        Issues a draw call (Arrays or Elements depending on pipeline). 
+        Arguments set to -1 will inherit the default values defined in the Pipeline.
+        """
+        ...
+
+    def draw_indirect(self, buffer: Buffer, count: int = 1, offset: int = 0, stride: int = 0) -> None:
+        """
+        Bytecode Instruction: DRAW_INDIRECT
+        
+        Issues a Multi-Draw Indirect call. Automatically issues a memory barrier 
+        to ensure preceding Compute Shader writes to the indirect buffer are visible.
+        """
+        ...
+
+    def dispatch(self, x: int, y: int, z: int) -> None:
+        """
+        Bytecode Instruction: DISPATCH
+        
+        Dispatches a compute shader with the given workgroup dimensions.
+        """
+        ...
+
+    def barrier(self, flags: int = 0xFFFFFFFF) -> None:
+        """
+        Bytecode Instruction: BARRIER
+        
+        Issues a glMemoryBarrier. Essential for synchronizing memory between 
+        Compute passes and Fragment/Vertex passes.
+        """
+        ...
+
+    def skip_if_zero(self, buffer: Buffer, offset: int) -> None:
+        """
+        Bytecode Instruction: SKIP_IF_ZERO
+        
+        Peeks at a uint32 in a MAPPED buffer. If the value is 0, the VM jumps 
+        over the instruction immediately following this one.
+        
+        Used for GPU-driven occlusion culling and LOD branching.
+        """
+        ...
+
+    def skip_if_not_zero(self, buffer: Buffer, offset: int) -> None:
+        """
+        Bytecode Instruction: SKIP_IF_NOT_ZERO
+        
+        Peeks at a uint32 in a MAPPED buffer. If the value is not 0, the VM jumps 
+        over the instruction immediately following this one.
+        """
+        ...
+
+    def label(self, name: str) -> None:
+        """
+        Records a named marker at the current write position. 
+        Labels are used as targets for 'goto' instructions.
+        """
+        ...
+
+    def goto(self, target: Union[str, int]) -> None:
+        """
+        Bytecode Instruction: GOTO
+        
+        Unconditionally jumps the VM instruction pointer to a named label (str) 
+        or an absolute byte offset (int).
+        """
+        ...
+
+    def tell(self) -> int:
+        """
+        Returns the current write cursor position (byte offset) in the buffer.
+        """
+        return 0
+
+    def print(self, message: str, buffer: Optional[Buffer] = None, offset: int = 0) -> None:
+        """
+        Bytecode Instruction: PRINT
+        
+        Outputs a message to stderr from the C-loop during execution.
+        If a mapped buffer is provided, it also peeks and prints the uint32 at 'offset'.
+        """
+        ...
+
+    def dump(self, buffer: Buffer, offset: int = 0, count: int = 1, type: Literal['float', 'int', 'uint'] = 'float', message: str = "DUMP") -> None:
+        """
+        Bytecode Instruction: DUMP
+        
+        Formats and prints a range of memory from a mapped buffer to stderr.
+        Interpretation of data is controlled by the 'type' parameter.
+        """
+        ...
+
+    def call(self, other: CommandBuffer) -> None:
+        """
+        Bytecode Instruction: CALL
+        
+        Executes another CommandBuffer as a subroutine. The child buffer 
+        inherits the currently bound Pipeline and state from the caller.
+        
+        Note:
+            Maximum recursion depth is 16.
+        """
+        ...
+    
+    def signal(self, fence: Fence) -> None:
+        """
+        Bytecode Instruction: SIGNAL_FENCE
+        
+        Updates the provided Fence object with a new sync point when reached 
+        in the execution sequence.
+        """
+        ...
+
+    def wait(self, fence: Fence) -> None:
+        """
+        Bytecode Instruction: WAIT_FENCE
+        Instructs the GPU to wait for the fence before proceeding. 
+        Does not block the CPU. Used for cross-buffer sync.
+        """
+        ...
+
+    def skip_if_not_ready(self, fence: Fence) -> None:
+        """
+        Bytecode Instruction: SKIP_IF_NOT_READY
+        Polls the fence (non-blocking). If the GPU has not reached the 
+        sync point, the instruction immediately following this one is skipped.
+        """
+        ...
+
+    def set_iter(self, reg: int, value: int) -> None:
+        """Sets internal VM register i[reg] to value. (reg: 0-7)"""
+        ...
+
+    def jump_iter(self, reg: int, target: Union[str, int]) -> None:
+        """
+        Decrements i[reg]. If the result is greater than 0, 
+        jumps to the target label or offset.
+        """
+        ...
+
+    def store_reg(self, reg: int, buffer: Buffer, offset: int) -> None:
+        """
+        Bytecode Instruction: STORE_REG
+        Writes the current value of VM register i[reg] into the MAPPED buffer 
+        at the specified byte offset.
+        """
+        ...
+    def load_reg(self, reg: int, buffer: Buffer, offset: int) -> None:
+        """Reads a uint32 from a mapped buffer into register i[reg]."""
+        ...
+
+    def alu(self, reg_a: int, reg_b: int, op: Literal['add', 'sub', 'mul', 'div', 'and', 'or']) -> None:
+        """Performs i[reg_a] = i[reg_a] OP i[reg_b]."""
+        ...
+
+    def ret(self) -> None:
+        """Bytecode Instruction: RET. Exits current buffer/subroutine."""
+        ...
+
+    def ret_if_zero(self, buffer: Buffer, offset: int) -> None:
+        """Bytecode Instruction: RET_IF_ZERO. Exits current buffer if memory is 0."""
+        ...
+
+    def ret_if_not_zero(self, buffer: Buffer, offset: int) -> None:
+        """Bytecode Instruction: RET_IF_NOT_ZERO. Exits current buffer if memory is not 0."""
+        ...
+
+    def skip_reg_zero(self, reg: int) -> None:
+        """
+        Bytecode Instruction: SKIP_REG_ZERO
+        
+        Peeks at internal VM register i[reg]. If the value is 0, the VM jumps 
+        over the instruction immediately following this one.
+        
+        This allows for branching based on C-side ALU calculations.
+        """
+        ...
+
+    def skip_reg_not_zero(self, reg: int) -> None:
+        """
+        Bytecode Instruction: SKIP_REG_NOT_ZERO
+        
+        Peeks at internal VM register i[reg]. If the value is not 0, the VM jumps 
+        over the instruction immediately following this one.
+        """
+        ...
+
+    def load_reg_indirect(self, reg: int, buffer: Buffer, index_reg: int, base_offset: int = 0, stride: int = 4) -> None:
+        """
+        Bytecode Instruction: LOAD_REG_INDIRECT
+        
+        Performs an array-style read from a MAPPED buffer into register i[reg].
+        Calculation: i[reg] = buffer[base_offset + (i[index_reg] * stride)]
+        
+        Allows the VM to iterate through arrays of data (e.g. visibility bits) in a loop.
+        """
+        ...
+
+    def store_reg_indirect(self, reg: int, buffer: Buffer, index_reg: int, base_offset: int = 0, stride: int = 4) -> None:
+        """
+        Bytecode Instruction: STORE_REG_INDIRECT
+        
+        Performs an array-style write from register i[reg] into a MAPPED buffer.
+        Calculation: buffer[base_offset + (i[index_reg] * stride)] = i[reg]
+        
+        Allows the VM to write back results of calculations to GPU memory (e.g. patching MDI counts).
+        """
+        ...
+
+    def serialize(self) -> Tuple[bytes, List[Any]]:
+        """
+        Serializes the bytecode and object references into a relocatable format.
+        Returns: (bytecode_bytes, symbol_table_list)
+        """
+        ...
+
+    def patch(self, bytecode: bytes, symbol_table: List[Any]) -> None:
+        """
+        Inflates a serialized bytecode block by mapping symbols back to live pointers.
+        Automatically closes the buffer for submission.
+        """
+        ...
+
+    def push(self, reg: int) -> None:
+        """
+        Bytecode Instruction: PUSH
+        
+        Saves the current value of VM register i[reg] onto the internal VM stack.
+        The stack is shared across all subroutine calls (CALL).
+        
+        Note:
+            The VM stack has a fixed capacity of 128 entries. Exceeding this 
+            limit will result in undefined behavior or a VM abort.
+            
+        Example:
+            cmd.push(0) # Backup register 0
+        """
+        ...
+
+    def pop(self, reg: int) -> None:
+        """
+        Bytecode Instruction: POP
+        
+        Removes the top value from the VM stack and restores it into register i[reg].
+        Registers should be popped in the exact reverse order they were pushed.
+        
+        Example:
+            cmd.pop(0) # Restore register 0
         """
         ...
 
