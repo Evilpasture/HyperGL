@@ -306,6 +306,12 @@ class Fence:
         """
         ...
 
+    @property
+    def signaled(self) -> bool:
+        """True if the fence has been signaled by the GPU."""
+        ...
+
+
 # --- High-Level Compiler Types ---
 
 class SceneCompiler:

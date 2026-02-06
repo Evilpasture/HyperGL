@@ -6558,6 +6558,13 @@ static PyObject *Fence_meth_wait_gpu(Fence *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
+static PyObject *Fence_get_signaled(Fence *self, void *closure) {
+    if (self->sync) {
+        Py_RETURN_TRUE;
+    }
+    Py_RETURN_FALSE;
+}
+
 // -----------------------------------------------------------------------------
 // Math & Camera Helper
 // -----------------------------------------------------------------------------
@@ -8652,6 +8659,11 @@ static PyMemberDef CommandBuffer_members[] = {
     {0}
 };
 
+static PyGetSetDef Fence_getset[] = {
+    {"signaled", (getter)Fence_get_signaled, NULL, "True if the fence has a sync object", NULL},
+    {0}
+};
+
 // -----------------------------------------------------------------------------
 // Type Slots & Specs
 // -----------------------------------------------------------------------------
@@ -8738,6 +8750,7 @@ static PyType_Slot Fence_slots[] = {
     {Py_tp_traverse, (void *)Fence_traverse},
     {Py_tp_clear, (void *)Fence_clear},
     {Py_tp_methods, Fence_methods},
+    {Py_tp_getset, Fence_getset},
     {0},
 };
 
