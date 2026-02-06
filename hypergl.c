@@ -506,7 +506,7 @@ _Static_assert(sizeof(uniform_upload_table) / sizeof(uniform_upload_table[0]) ==
                    UF_COUNT,
                "uniform_upload_table must match UniformFunction enum");
 
-static void bind_uniforms(const Pipeline *self) {
+static FORCE_INLINE void bind_uniforms(const Pipeline *self) {
   const UniformHeader *const header =
       (UniformHeader *)self->uniform_layout_buffer.buf;
   const char *const data = (char *)self->uniform_data_buffer.buf;
@@ -6374,16 +6374,23 @@ static Fence *Context_meth_fence(Context *self, PyObject *args) {
 static PyObject *Context_meth_command_buffer(Context *self, PyObject *args) {
     CommandBuffer *cmd = PyObject_GC_New(CommandBuffer, self->module_state->CommandBuffer_type);
     if (!cmd) return NULL;
-    // Init manually since we bypassed __new__ logic for custom setup
-    cmd->ctx = self; Py_INCREF(self);
+
+    cmd->ctx = (Context *)Py_NewRef(self);
     cmd->size = 0;
     cmd->capacity = 4096;
     cmd->data = PyMem_Malloc(cmd->capacity);
-    cmd->ref_list = PyList_New(0);
     cmd->recording = 1;
-    if (!cmd->data || !cmd->ref_list) {
-        Py_DECREF(cmd); return PyErr_NoMemory();
+    
+    // CRITICAL: Initialize ALL Python objects used for tracking
+    cmd->ref_list = PyList_New(0);
+    cmd->labels = PyDict_New();
+    cmd->fixups = PyList_New(0);
+
+    if (!cmd->data || !cmd->ref_list || !cmd->labels || !cmd->fixups) {
+        Py_XDECREF(cmd); // dealloc handles the rest
+        return PyErr_NoMemory();
     }
+
     PyObject_GC_Track(cmd);
     return (PyObject *)cmd;
 }
@@ -6921,7 +6928,10 @@ static void CommandBuffer_push_ref(CommandBuffer *self, PyObject *obj) {
 static PyObject *CommandBuffer_meth_bind_pipeline(CommandBuffer *self, PyObject *args) {
     PyObject *obj;
     if (!PyArg_ParseTuple(args, "O!", self->ctx->module_state->Pipeline_type, &obj)) return NULL;
-    
+    if (!self->recording) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] CommandBuffer is closed. Call begin() to reset.");
+        return NULL;
+    }
     if (CommandBuffer_ensure(self, sizeof(CmdBindPipeline)) < 0) return NULL;
     
     CmdBindPipeline *cmd = (CmdBindPipeline *)(self->data + self->size);
@@ -6937,7 +6947,10 @@ static PyObject *CommandBuffer_meth_bind_pipeline(CommandBuffer *self, PyObject 
 static PyObject *CommandBuffer_meth_bind_compute(CommandBuffer *self, PyObject *args) {
     PyObject *obj;
     if (!PyArg_ParseTuple(args, "O!", self->ctx->module_state->Compute_type, &obj)) return NULL;
-    
+    if (!self->recording) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] CommandBuffer is closed. Call begin() to reset.");
+        return NULL;
+    }
     if (CommandBuffer_ensure(self, sizeof(CmdBindCompute)) < 0) return NULL;
     
     CmdBindCompute *cmd = (CmdBindCompute *)(self->data + self->size);
@@ -6953,8 +6966,10 @@ static PyObject *CommandBuffer_meth_bind_compute(CommandBuffer *self, PyObject *
 static PyObject *CommandBuffer_meth_clear(CommandBuffer *self, PyObject *args) {
     int mask = GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
     if (!PyArg_ParseTuple(args, "|i", &mask)) return NULL;
-
-    if (CommandBuffer_ensure(self, sizeof(CmdClear)) < 0) return NULL;
+    if (!self->recording) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] CommandBuffer is closed. Call begin() to reset.");
+        return NULL;
+    }    if (CommandBuffer_ensure(self, sizeof(CmdClear)) < 0) return NULL;
     CmdClear *cmd = (CmdClear *)(self->data + self->size);
     cmd->header.type = CMD_CLEAR;
     cmd->header.size = sizeof(CmdClear);
@@ -6966,7 +6981,10 @@ static PyObject *CommandBuffer_meth_clear(CommandBuffer *self, PyObject *args) {
 static PyObject *CommandBuffer_meth_bind_descriptor_set(CommandBuffer *self, PyObject *args) {
     PyObject *obj;
     if (!PyArg_ParseTuple(args, "O!", self->ctx->module_state->DescriptorSet_type, &obj)) return NULL;
-    
+    if (!self->recording) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] CommandBuffer is closed. Call begin() to reset.");
+        return NULL;
+    }
     if (CommandBuffer_ensure(self, sizeof(CmdBindDescriptorSet)) < 0) return NULL;
     CmdBindDescriptorSet *cmd = (CmdBindDescriptorSet *)(self->data + self->size);
     cmd->header.type = CMD_BIND_DESCRIPTOR_SET;
@@ -6982,7 +7000,10 @@ static PyObject *CommandBuffer_meth_draw(CommandBuffer *self, PyObject *args, Py
     static char *kw[] = {"vertex_count", "instance_count", "first", NULL};
     int vc = -1, ic = -1, first = -1;
     if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|iii", kw, &vc, &ic, &first)) return NULL;
-    
+    if (!self->recording) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] CommandBuffer is closed. Call begin() to reset.");
+        return NULL;
+    }
     if (CommandBuffer_ensure(self, sizeof(CmdDraw)) < 0) return NULL;
     CmdDraw *cmd = (CmdDraw *)(self->data + self->size);
     cmd->header.type = CMD_DRAW;
@@ -7001,7 +7022,10 @@ static PyObject *CommandBuffer_meth_draw_indirect(CommandBuffer *self, PyObject 
     
     if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O!|iii", kw, 
         self->ctx->module_state->Buffer_type, &buf_obj, &count, &offset, &stride)) return NULL;
-
+    if (!self->recording) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] CommandBuffer is closed. Call begin() to reset.");
+        return NULL;
+    }
     if (CommandBuffer_ensure(self, sizeof(CmdDrawIndirect)) < 0) return NULL;
     CmdDrawIndirect *cmd = (CmdDrawIndirect *)(self->data + self->size);
     cmd->header.type = CMD_DRAW_INDIRECT;
@@ -7019,6 +7043,10 @@ static PyObject *CommandBuffer_meth_draw_indirect(CommandBuffer *self, PyObject 
 static PyObject *CommandBuffer_meth_dispatch(CommandBuffer *self, PyObject *args) {
     int x, y, z;
     if (!PyArg_ParseTuple(args, "iii", &x, &y, &z)) return NULL;
+    if (!self->recording) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] CommandBuffer is closed. Call begin() to reset.");
+        return NULL;
+    }
     if (CommandBuffer_ensure(self, sizeof(CmdDispatch)) < 0) return NULL;
     CmdDispatch *cmd = (CmdDispatch *)(self->data + self->size);
     cmd->header.type = CMD_DISPATCH;
@@ -7031,6 +7059,10 @@ static PyObject *CommandBuffer_meth_dispatch(CommandBuffer *self, PyObject *args
 static PyObject *CommandBuffer_meth_barrier(CommandBuffer *self, PyObject *args) {
     int flags = GL_ALL_BARRIER_BITS;
     if (!PyArg_ParseTuple(args, "|i", &flags)) return NULL;
+    if (!self->recording) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] CommandBuffer is closed. Call begin() to reset.");
+        return NULL;
+    }
     if (CommandBuffer_ensure(self, sizeof(CmdBarrier)) < 0) return NULL;
     CmdBarrier *cmd = (CmdBarrier *)(self->data + self->size);
     cmd->header.type = CMD_BARRIER;
@@ -7040,130 +7072,1274 @@ static PyObject *CommandBuffer_meth_barrier(CommandBuffer *self, PyObject *args)
     Py_RETURN_NONE;
 }
 
-static PyObject *CommandBuffer_meth_submit(CommandBuffer *self, PyObject *args) {
-    if (self->ctx->is_lost) {
-        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Context lost");
+static PyObject *CommandBuffer_meth_skip_if_zero(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
+    static char *keywords[] = {"buffer", "offset", NULL}; // Add keywords
+    PyObject *buf_obj;
+    int offset;
+    
+    // Change PyArg_ParseTuple to PyArg_ParseTupleAndKeywords
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O!i", keywords, 
+                                     self->ctx->module_state->Buffer_type, &buf_obj, &offset)) 
+        return NULL;
+
+    if (!self->recording) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] CommandBuffer is closed. Call begin() to reset.");
+        return NULL;
+    }
+    
+    Buffer *buf = (Buffer *)buf_obj;
+    if (!buf->is_persistently_mapped) {
+        PyErr_SetString(PyExc_ValueError, "[HyperGL] skip_if_zero requires a MAPPED buffer (SSBO).");
+        return NULL;
+    }
+    if (offset < 0 || (size_t)offset + 4 > (size_t)buf->size) {
+        PyErr_SetString(PyExc_ValueError, "[HyperGL] offset out of buffer bounds.");
         return NULL;
     }
 
-    Pipeline *active_pipe = NULL;
-    Compute *active_compute = NULL;
-    Context *ctx = self->ctx;
+    if (CommandBuffer_ensure(self, sizeof(CmdSkip)) < 0) return NULL;
+    
+    CmdSkip *cmd = (CmdSkip *)(self->data + self->size);
+    cmd->header.type = CMD_SKIP_IF_ZERO;
+    cmd->header.size = sizeof(CmdSkip);
+    cmd->buffer = buf;
+    cmd->offset = (uint32_t)offset;
+    
+    CommandBuffer_push_ref(self, buf_obj);
+    self->size += cmd->header.size;
+    Py_RETURN_NONE;
+}
 
-    Py_BEGIN_ALLOW_THREADS
-    PyMutex_Lock(&ctx->state_lock);
+static PyObject *CommandBuffer_meth_skip_if_not_zero(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
+    static char *keywords[] = {"buffer", "offset", NULL};
+    PyObject *buf_obj;
+    int offset;
+    
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O!i", keywords, 
+                                     self->ctx->module_state->Buffer_type, &buf_obj, &offset)) 
+        return NULL;
+    if (!self->recording) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] CommandBuffer is closed. Call begin() to reset.");
+        return NULL;
+    }
+    Buffer *buf = (Buffer *)buf_obj;
+    if (!buf->is_persistently_mapped) {
+        PyErr_SetString(PyExc_ValueError, "[HyperGL] skip_if_not_zero requires a MAPPED buffer.");
+        return NULL;
+    }
+    if (offset < 0 || (size_t)offset + 4 > (size_t)buf->size) {
+        PyErr_SetString(PyExc_ValueError, "[HyperGL] offset out of buffer bounds.");
+        return NULL;
+    }
 
+    if (CommandBuffer_ensure(self, sizeof(CmdSkip)) < 0) return NULL;
+    
+    CmdSkip *cmd = (CmdSkip *)(self->data + self->size);
+    cmd->header.type = CMD_SKIP_IF_NOT_ZERO;
+    cmd->header.size = sizeof(CmdSkip);
+    cmd->buffer = buf;
+    cmd->offset = (uint32_t)offset;
+    
+    CommandBuffer_push_ref(self, buf_obj);
+    self->size += cmd->header.size;
+    Py_RETURN_NONE;
+}
+
+// helper to get current write position
+static PyObject *CommandBuffer_meth_tell(CommandBuffer *self, PyObject *Py_UNUSED(ignored)) {
+    return PyLong_FromSize_t(self->size);
+}
+
+static PyObject *CommandBuffer_meth_label(CommandBuffer *self, PyObject *arg) {
+    if (!PyUnicode_Check(arg)) {
+        PyErr_SetString(PyExc_TypeError, "[HyperGL] Label name must be a string.");
+        return NULL;
+    }
+
+    // Map the name to the current write position
+    if (PyDict_SetItem(self->labels, arg, PyLong_FromSize_t(self->size)) < 0) {
+        return NULL;
+    }
+
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_goto(CommandBuffer *self, PyObject *arg) {
+    uint32_t target_offset = 0;
+    int needs_fixup = 0;
+
+    if (PyUnicode_Check(arg)) {
+        // Look up label
+        PyObject *val = PyDict_GetItem(self->labels, arg);
+        if (val) {
+            target_offset = (uint32_t)PyLong_AsSize_t(val);
+        } else {
+            // Forward jump: we'll fix this later
+            needs_fixup = 1;
+        }
+    } else if (PyLong_Check(arg)) {
+        target_offset = (uint32_t)PyLong_AsSize_t(arg);
+    } else {
+        PyErr_SetString(PyExc_TypeError, "[HyperGL] Goto target must be a label name (str) or offset (int).");
+        return NULL;
+    }
+
+    if (CommandBuffer_ensure(self, sizeof(CmdGoto)) < 0) return NULL;
+    
+    CmdGoto *cmd = (CmdGoto *)(self->data + self->size);
+    cmd->header.type = CMD_GOTO;
+    cmd->header.size = sizeof(CmdGoto);
+    cmd->target_offset = target_offset;
+
+    if (needs_fixup) {
+        // Record WHERE in the bytecode the target_offset lives so we can patch it
+        size_t patch_ptr_offset = self->size + offsetof(CmdGoto, target_offset);
+        PyObject *fixup = Py_BuildValue("KO", (unsigned long long)patch_ptr_offset, arg);
+        PyList_Append(self->fixups, fixup);
+        Py_DECREF(fixup);
+    }
+    
+    self->size += cmd->header.size;
+    Py_RETURN_NONE;
+}
+
+static int CommandBuffer_resolve_labels(CommandBuffer *self) {
+    Py_ssize_t fixup_count = PyList_Size(self->fixups);
+    if (fixup_count == 0) return 0;
+
+    for (Py_ssize_t i = 0; i < fixup_count; i++) {
+        PyObject *item = PyList_GetItem(self->fixups, i);
+        size_t patch_pos = (size_t)PyLong_AsUnsignedLongLong(PyTuple_GetItem(item, 0));
+        PyObject *name = PyTuple_GetItem(item, 1);
+
+        PyObject *offset_obj = PyDict_GetItem(self->labels, name);
+        if (!offset_obj) {
+            PyErr_Format(PyExc_KeyError, "[HyperGL] Undefined label: '%U'", name);
+            return -1;
+        }
+
+        uint32_t real_offset = (uint32_t)PyLong_AsSize_t(offset_obj);
+        // Patch the bytecode directly
+        *(uint32_t *)(self->data + patch_pos) = real_offset;
+    }
+
+    // Clear fixups so we don't re-patch every time submit is called
+    PyList_SetSlice(self->fixups, 0, fixup_count, NULL);
+    return 0;
+}
+
+static PyObject *CommandBuffer_meth_begin(CommandBuffer *self, PyObject *Py_UNUSED(ignored)) {
+    self->size = 0;      // Reset the program to the start
+    self->recording = 1; // Open for writing
+    PyList_SetSlice(self->ref_list, 0, PyList_Size(self->ref_list), NULL); // Clear refs
+    PyDict_Clear(self->labels);
+    PyList_SetSlice(self->fixups, 0, PyList_Size(self->fixups), NULL);
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_end(CommandBuffer *self, PyObject *Py_UNUSED(ignored)) {
+    if (CommandBuffer_resolve_labels(self) < 0) return NULL; // Fix jumps now
+    self->recording = 0; // Lock the buffer
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_print(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
+    static char *keywords[] = {"message", "buffer", "offset", NULL};
+    const char *msg;
+    PyObject *buf_obj = Py_None;
+    int offset = 0;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|Oi", keywords, &msg, &buf_obj, &offset))
+        return NULL;
+
+    if (!self->recording) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] CommandBuffer is closed.");
+        return NULL;
+    }
+
+    if (CommandBuffer_ensure(self, sizeof(CmdPrint)) < 0) return NULL;
+
+    CmdPrint *cmd = (CmdPrint *)(self->data + self->size);
+    cmd->header.type = CMD_PRINT;
+    cmd->header.size = sizeof(CmdPrint);
+    
+    // Copy message safely
+    strncpy(cmd->message, msg, sizeof(cmd->message) - 1);
+    cmd->message[sizeof(cmd->message) - 1] = '\0';
+
+    if (buf_obj != Py_None) {
+        if (!PyObject_TypeCheck(buf_obj, self->ctx->module_state->Buffer_type)) {
+            PyErr_SetString(PyExc_TypeError, "buffer must be a Buffer object.");
+            return NULL;
+        }
+        Buffer *buf = (Buffer *)buf_obj;
+        if (!buf->is_persistently_mapped) {
+            PyErr_SetString(PyExc_ValueError, "Buffer must be mapped for peeking.");
+            return NULL;
+        }
+        cmd->buffer = buf;
+        cmd->offset = (uint32_t)offset;
+        CommandBuffer_push_ref(self, buf_obj);
+    } else {
+        cmd->buffer = NULL;
+    }
+
+    self->size += cmd->header.size;
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_dump(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
+    static char *keywords[] = {"buffer", "offset", "count", "type", "message", NULL};
+    PyObject *buf_obj;
+    int offset = 0;
+    int count = 1;
+    const char *type_str = "float";
+    const char *msg = "DUMP";
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O!|iiss", keywords, 
+                                     self->ctx->module_state->Buffer_type, &buf_obj, 
+                                     &offset, &count, &type_str, &msg))
+        return NULL;
+
+    if (!self->recording) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] CommandBuffer is closed.");
+        return NULL;
+    }
+
+    Buffer *buf = (Buffer *)buf_obj;
+    if (!buf->is_persistently_mapped) {
+        PyErr_SetString(PyExc_ValueError, "Buffer must be mapped for dumping.");
+        return NULL;
+    }
+
+    if (CommandBuffer_ensure(self, sizeof(CmdDump)) < 0) return NULL;
+
+    CmdDump *cmd = (CmdDump *)(self->data + self->size);
+    cmd->header.type = CMD_DUMP;
+    cmd->header.size = sizeof(CmdDump);
+    cmd->buffer = buf;
+    cmd->offset = (uint32_t)offset;
+    cmd->count = (uint32_t)count;
+    
+    // Encode type
+    if (strcmp(type_str, "int") == 0) cmd->stride = 1;
+    else if (strcmp(type_str, "uint") == 0) cmd->stride = 2;
+    else cmd->stride = 0; // Default float
+
+    strncpy(cmd->message, msg, sizeof(cmd->message) - 1);
+    cmd->message[sizeof(cmd->message) - 1] = '\0';
+
+    CommandBuffer_push_ref(self, buf_obj);
+    self->size += cmd->header.size;
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_call(CommandBuffer *self, PyObject *arg) {
+    if (!PyObject_TypeCheck(arg, self->ctx->module_state->CommandBuffer_type)) {
+        PyErr_SetString(PyExc_TypeError, "[HyperGL] Argument must be a CommandBuffer.");
+        return NULL;
+    }
+
+    CommandBuffer *other = (CommandBuffer *)arg;
+    if (other->ctx != self->ctx) {
+        PyErr_SetString(PyExc_ValueError, "[HyperGL] Cannot call a CommandBuffer from a different Context.");
+        return NULL;
+    }
+
+    if (!self->recording) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] CommandBuffer is closed.");
+        return NULL;
+    }
+
+    if (CommandBuffer_ensure(self, sizeof(CmdCall)) < 0) return NULL;
+
+    CmdCall *cmd = (CmdCall *)(self->data + self->size);
+    cmd->header.type = CMD_CALL;
+    cmd->header.size = sizeof(CmdCall);
+    cmd->other = other;
+
+    CommandBuffer_push_ref(self, arg);
+    self->size += cmd->header.size;
+    Py_RETURN_NONE;
+}
+
+static PyObject *record_fence_cmd(CommandBuffer *self, PyObject *arg, CommandType type) {
+    if (!PyObject_TypeCheck(arg, self->ctx->module_state->Fence_type)) {
+        PyErr_SetString(PyExc_TypeError, "Argument must be a Fence object.");
+        return NULL;
+    }
+    if (!self->recording) {
+        PyErr_SetString(PyExc_RuntimeError, "CommandBuffer is closed.");
+        return NULL;
+    }
+
+    if (CommandBuffer_ensure(self, sizeof(CmdFence)) < 0) return NULL;
+
+    CmdFence *cmd = (CmdFence *)(self->data + self->size);
+    cmd->header.type = type;
+    cmd->header.size = sizeof(CmdFence);
+    cmd->fence = (Fence *)arg;
+
+    CommandBuffer_push_ref(self, arg);
+    self->size += cmd->header.size;
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_signal(CommandBuffer *self, PyObject *arg) {
+    return record_fence_cmd(self, arg, CMD_SIGNAL_FENCE);
+}
+
+static PyObject *CommandBuffer_meth_wait(CommandBuffer *self, PyObject *arg) {
+    return record_fence_cmd(self, arg, CMD_WAIT_FENCE);
+}
+
+static PyObject *CommandBuffer_meth_skip_if_not_ready(CommandBuffer *self, PyObject *arg) {
+    return record_fence_cmd(self, arg, CMD_SKIP_IF_NOT_READY);
+}
+
+static PyObject *CommandBuffer_meth_nop(CommandBuffer *self, PyObject *args) {
+    int size = sizeof(CmdHeader); // Default 8 bytes
+    if (!PyArg_ParseTuple(args, "|i", &size)) return NULL;
+
+    if (size < (int)sizeof(CmdHeader) || (size % 8) != 0) {
+        PyErr_SetString(PyExc_ValueError, "[HyperGL] NOP size must be a multiple of 8 (min 8).");
+        return NULL;
+    }
+
+    if (CommandBuffer_ensure(self, (size_t)size) < 0) return NULL;
+
+    CmdHeader *cmd = (CmdHeader *)(self->data + self->size);
+    cmd->type = CMD_NOP;
+    cmd->size = (uint32_t)size;
+
+    self->size += cmd->size;
+    Py_RETURN_NONE;
+}
+
+// The "Eraser" method
+static PyObject *CommandBuffer_meth_erase(CommandBuffer *self, PyObject *arg) {
+    Py_ssize_t offset = PyLong_AsSsize_t(arg);
+    if (offset < 0 || (size_t)offset + sizeof(CmdHeader) > self->size) {
+        PyErr_SetString(PyExc_IndexError, "[HyperGL] Invalid bytecode offset.");
+        return NULL;
+    }
+
+    // We don't remove the data (too slow, breaks jumps). 
+    // We just change the type to NOP.
+    CmdHeader *h = (CmdHeader *)(self->data + offset);
+    h->type = CMD_NOP; 
+    
+    // NOTE: h->size remains the same. 
+    // The submit loop will now see "NOP" and skip the entire block of the old instruction.
+    
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_set_iter(CommandBuffer *self, PyObject *args) {
+    int reg, value;
+    if (!PyArg_ParseTuple(args, "ii", &reg, &value)) return NULL;
+    if (reg < 0 || reg > 7) {
+        PyErr_SetString(PyExc_ValueError, "Register index must be 0-7");
+        return NULL;
+    }
+
+    if (CommandBuffer_ensure(self, sizeof(CmdSetIter)) < 0) return NULL;
+    CmdSetIter *cmd = (CmdSetIter *)(self->data + self->size);
+    cmd->header.type = CMD_SET_ITER;
+    cmd->header.size = sizeof(CmdSetIter);
+    cmd->reg = (uint32_t)reg;
+    cmd->value = (uint32_t)value;
+    self->size += cmd->header.size;
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_jump_iter(CommandBuffer *self, PyObject *args) {
+    int reg;
+    PyObject *target;
+    if (!PyArg_ParseTuple(args, "iO", &reg, &target)) return NULL;
+
+    uint32_t offset = 0;
+    int needs_fixup = 0;
+
+    if (PyUnicode_Check(target)) {
+        PyObject *val = PyDict_GetItem(self->labels, target);
+        if (val) offset = (uint32_t)PyLong_AsSize_t(val);
+        else needs_fixup = 1;
+    } else {
+        offset = (uint32_t)PyLong_AsSize_t(target);
+    }
+
+    if (CommandBuffer_ensure(self, sizeof(CmdJumpIter)) < 0) return NULL;
+    CmdJumpIter *cmd = (CmdJumpIter *)(self->data + self->size);
+    cmd->header.type = CMD_JUMP_ITER;
+    cmd->header.size = sizeof(CmdJumpIter);
+    cmd->reg = (uint32_t)reg;
+    cmd->target_offset = offset;
+
+    if (needs_fixup) {
+        size_t patch_ptr_offset = self->size + offsetof(CmdJumpIter, target_offset);
+        PyObject *fix = Py_BuildValue("KO", (unsigned long long)patch_ptr_offset, target);
+        PyList_Append(self->fixups, fix);
+        Py_DECREF(fix);
+    }
+
+    self->size += cmd->header.size;
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_store_reg(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
+    static char *keywords[] = {"reg", "buffer", "offset", NULL};
+    int reg, offset;
+    PyObject *buf_obj;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "iO!i", keywords, 
+                                     &reg, self->ctx->module_state->Buffer_type, &buf_obj, &offset)) 
+        return NULL;
+
+    if (reg < 0 || reg > 7) {
+        PyErr_SetString(PyExc_ValueError, "Register index must be 0-7");
+        return NULL;
+    }
+
+    Buffer *buf = (Buffer *)buf_obj;
+    if (!buf->is_persistently_mapped) {
+        PyErr_SetString(PyExc_ValueError, "store_reg requires a MAPPED buffer.");
+        return NULL;
+    }
+    
+    if (offset < 0 || (size_t)offset + 4 > (size_t)buf->size) {
+        PyErr_SetString(PyExc_ValueError, "offset out of buffer bounds.");
+        return NULL;
+    }
+
+    if (CommandBuffer_ensure(self, sizeof(CmdStoreReg)) < 0) return NULL;
+
+    CmdStoreReg *cmd = (CmdStoreReg *)(self->data + self->size);
+    cmd->header.type = CMD_STORE_REG;
+    cmd->header.size = sizeof(CmdStoreReg);
+    cmd->reg = (uint32_t)reg;
+    cmd->buffer = buf;
+    cmd->offset = (uint32_t)offset;
+
+    CommandBuffer_push_ref(self, buf_obj);
+    self->size += cmd->header.size;
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_load_reg(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
+    static char *keywords[] = {"reg", "buffer", "offset", NULL};
+    int reg, offset;
+    PyObject *buf_obj;
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "iO!i", keywords, &reg, self->ctx->module_state->Buffer_type, &buf_obj, &offset)) return NULL;
+
+    if (reg < 0 || reg > 7) return PyErr_Format(PyExc_ValueError, "Register index must be 0-7");
+    Buffer *buf = (Buffer *)buf_obj;
+    if (!buf->is_persistently_mapped) return PyErr_Format(PyExc_ValueError, "Buffer must be mapped.");
+
+    if (CommandBuffer_ensure(self, sizeof(CmdLoadReg)) < 0) return NULL;
+    CmdLoadReg *cmd = (CmdLoadReg *)(self->data + self->size);
+    cmd->header.type = CMD_LOAD_REG;
+    cmd->header.size = sizeof(CmdLoadReg);
+    cmd->reg = (uint32_t)reg;
+    cmd->buffer = buf;
+    cmd->offset = (uint32_t)offset;
+    CommandBuffer_push_ref(self, buf_obj);
+    self->size += cmd->header.size;
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_alu(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
+    static char *keywords[] = {"reg_a", "reg_b", "op", NULL};
+    int a, b;
+    PyObject *op_obj;
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "iiO", keywords, &a, &b, &op_obj)) return NULL;
+
+    if (a < 0 || a > 7 || b < 0 || b > 7) return PyErr_Format(PyExc_ValueError, "Registers must be 0-7");
+
+    uint32_t op_code = 0;
+    if (PyUnicode_Check(op_obj)) {
+        const char *s = PyUnicode_AsUTF8(op_obj);
+        if (strcmp(s, "add") == 0) op_code = 0;
+        else if (strcmp(s, "sub") == 0) op_code = 1;
+        else if (strcmp(s, "mul") == 0) op_code = 2;
+        else if (strcmp(s, "div") == 0) op_code = 3;
+        else if (strcmp(s, "and") == 0) op_code = 4;
+        else if (strcmp(s, "or") == 0)  op_code = 5;
+        else return PyErr_Format(PyExc_ValueError, "Unknown ALU op: %s", s);
+    } else {
+        op_code = (uint32_t)PyLong_AsUnsignedLong(op_obj);
+    }
+
+    if (CommandBuffer_ensure(self, sizeof(CmdAlu)) < 0) return NULL;
+    CmdAlu *cmd = (CmdAlu *)(self->data + self->size);
+    cmd->header.type = CMD_ALU;
+    cmd->header.size = sizeof(CmdAlu);
+    cmd->reg_a = (uint32_t)a;
+    cmd->reg_b = (uint32_t)b;
+    cmd->op = op_code;
+    self->size += cmd->header.size;
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_ret(CommandBuffer *self, PyObject *Py_UNUSED(ignored)) {
+    if (!self->recording) return PyErr_Format(PyExc_RuntimeError, "Closed.");
+    if (CommandBuffer_ensure(self, sizeof(CmdHeader)) < 0) return NULL;
+
+    CmdHeader *cmd = (CmdHeader *)(self->data + self->size);
+    cmd->type = CMD_RET;
+    cmd->size = sizeof(CmdHeader);
+    self->size += cmd->size;
+    Py_RETURN_NONE;
+}
+
+static PyObject *record_ret_cond(CommandBuffer *self, PyObject *args, PyObject *kwargs, int type) {
+    static char *keywords[] = {"buffer", "offset", NULL};
+    PyObject *buf_obj;
+    int offset;
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O!i", keywords, self->ctx->module_state->Buffer_type, &buf_obj, &offset)) return NULL;
+
+    Buffer *buf = (Buffer *)buf_obj;
+    if (!buf->is_persistently_mapped) return PyErr_Format(PyExc_ValueError, "Buffer must be mapped.");
+
+    if (CommandBuffer_ensure(self, sizeof(CmdRetCond)) < 0) return NULL;
+    CmdRetCond *cmd = (CmdRetCond *)(self->data + self->size);
+    cmd->header.type = type;
+    cmd->header.size = sizeof(CmdRetCond);
+    cmd->buffer = buf;
+    cmd->offset = (uint32_t)offset;
+
+    CommandBuffer_push_ref(self, buf_obj);
+    self->size += cmd->header.size;
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_ret_if_zero(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
+    return record_ret_cond(self, args, kwargs, CMD_RET_IF_ZERO);
+}
+
+static PyObject *CommandBuffer_meth_ret_if_not_zero(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
+    return record_ret_cond(self, args, kwargs, CMD_RET_IF_NOT_ZERO);
+}
+
+static PyObject *CommandBuffer_meth_skip_reg_zero(CommandBuffer *self, PyObject *arg) {
+    int reg = to_int(arg);
+    if (reg < 0 || reg > 7) return PyErr_Format(PyExc_ValueError, "0-7");
+    if (CommandBuffer_ensure(self, sizeof(CmdSkipReg)) < 0) return NULL;
+    CmdSkipReg *cmd = (CmdSkipReg *)(self->data + self->size);
+    cmd->header.type = CMD_SKIP_REG_ZERO;
+    cmd->header.size = sizeof(CmdSkipReg);
+    cmd->reg = reg;
+    self->size += cmd->header.size;
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_skip_reg_not_zero(CommandBuffer *self, PyObject *arg) {
+    int reg = to_int(arg);
+    if (reg < 0 || reg > 7) return PyErr_Format(PyExc_ValueError, "Register must be 0-7");
+    if (CommandBuffer_ensure(self, sizeof(CmdSkipReg)) < 0) return NULL;
+    CmdSkipReg *cmd = (CmdSkipReg *)(self->data + self->size);
+    cmd->header.type = CMD_SKIP_REG_NOT_ZERO;
+    cmd->header.size = sizeof(CmdSkipReg);
+    cmd->reg = (uint32_t)reg;
+    self->size += cmd->header.size;
+    Py_RETURN_NONE;
+}
+
+
+static PyObject *record_mem_indirect(CommandBuffer *self, PyObject *args, PyObject *kwargs, int type) {
+    static char *kw[] = {"reg", "buffer", "index_reg", "base_offset", "stride", NULL};
+    int reg, idx_reg, base = 0, stride = 4;
+    PyObject *buf_obj;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "iO!iii", kw, 
+        &reg, self->ctx->module_state->Buffer_type, &buf_obj, &idx_reg, &base, &stride)) return NULL;
+
+    if (reg < 0 || reg > 7 || idx_reg < 0 || idx_reg > 7) 
+        return PyErr_Format(PyExc_ValueError, "Registers must be 0-7");
+
+    Buffer *buf = (Buffer *)buf_obj;
+    if (!buf->is_persistently_mapped) 
+        return PyErr_Format(PyExc_ValueError, "Buffer must be mapped.");
+
+    if (CommandBuffer_ensure(self, sizeof(CmdMemIndirect)) < 0) return NULL;
+    CmdMemIndirect *cmd = (CmdMemIndirect *)(self->data + self->size);
+    cmd->header.type = type;
+    cmd->header.size = sizeof(CmdMemIndirect);
+    cmd->buffer = buf;
+    cmd->reg = (uint32_t)reg;
+    cmd->index_reg = (uint32_t)idx_reg;
+    cmd->base_offset = (uint32_t)base;
+    cmd->stride = (uint32_t)stride;
+
+    CommandBuffer_push_ref(self, buf_obj);
+    self->size += cmd->header.size;
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_load_reg_indirect(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
+    return record_mem_indirect(self, args, kwargs, CMD_LOAD_REG_INDIRECT);
+}
+
+static PyObject *CommandBuffer_meth_store_reg_indirect(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
+    return record_mem_indirect(self, args, kwargs, CMD_STORE_REG_INDIRECT);
+}
+
+static int find_ref_index(PyObject *ref_list, PyObject *obj) {
+    if (!obj) return -1;
+    Py_ssize_t size = PyList_GET_SIZE(ref_list);
+    for (Py_ssize_t i = 0; i < size; i++) {
+        if (PyList_GET_ITEM(ref_list, i) == obj) return (int)i;
+    }
+    return -1;
+}
+
+static PyObject *CommandBuffer_meth_serialize(CommandBuffer *self, PyObject *Py_UNUSED(ignored)) {
+    if (self->recording) {
+        PyErr_SetString(PyExc_RuntimeError, "Cannot serialize while recording. Call end() first.");
+        return NULL;
+    }
+
+    // 1. Copy raw bytecode
+    uint8_t *blob = PyMem_Malloc(self->size);
+    if (!blob) return PyErr_NoMemory();
+    memcpy(blob, self->data, self->size);
+
+    // 2. Symbols -> Indices
+    uint8_t *ptr = blob;
+    uint8_t *end = ptr + self->size;
+
+    while (ptr < end) {
+        CmdHeader *header = (CmdHeader *)ptr;
+        
+        // We use a macro to handle the pointer-to-index swap
+        #define PATCH_PTR(member) do { \
+            intptr_t idx = (intptr_t)find_ref_index(self->ref_list, (PyObject *)(member)); \
+            memcpy((void *)&(member), (const void *)&idx, sizeof(void *)); \
+        } while(0)
+
+        switch (header->type) {
+            case CMD_BIND_PIPELINE:      PATCH_PTR(((CmdBindPipeline*)ptr)->pipeline); break;
+            case CMD_BIND_COMPUTE:       PATCH_PTR(((CmdBindCompute*)ptr)->compute); break;
+            case CMD_BIND_DESCRIPTOR_SET: PATCH_PTR(((CmdBindDescriptorSet*)ptr)->set); break;
+            case CMD_DRAW_INDIRECT:      PATCH_PTR(((CmdDrawIndirect*)ptr)->buffer); break;
+            case CMD_SKIP_IF_ZERO:
+            case CMD_SKIP_IF_NOT_ZERO:   PATCH_PTR(((CmdSkip*)ptr)->buffer); break;
+            case CMD_LOAD_REG:           PATCH_PTR(((CmdLoadReg*)ptr)->buffer); break;
+            case CMD_STORE_REG:          PATCH_PTR(((CmdStoreReg*)ptr)->buffer); break;
+            case CMD_LOAD_REG_INDIRECT:
+            case CMD_STORE_REG_INDIRECT: PATCH_PTR(((CmdMemIndirect*)ptr)->buffer); break;
+            case CMD_RET_IF_ZERO:
+            case CMD_RET_IF_NOT_ZERO:    PATCH_PTR(((CmdRetCond*)ptr)->buffer); break;
+            case CMD_SIGNAL_FENCE:
+            case CMD_WAIT_FENCE:
+            case CMD_SKIP_IF_NOT_READY:  PATCH_PTR(((CmdFence*)ptr)->fence); break;
+            case CMD_PRINT:              PATCH_PTR(((CmdPrint*)ptr)->buffer); break;
+            case CMD_DUMP:               PATCH_PTR(((CmdDump*)ptr)->buffer); break;
+            case CMD_CALL:               PATCH_PTR(((CmdCall*)ptr)->other); break;
+
+            // These contain no pointers; they are bit-carried exactly as they are
+            case CMD_NOP:
+            case CMD_CLEAR:
+            case CMD_DRAW:
+            case CMD_DISPATCH:
+            case CMD_BARRIER:
+            case CMD_GOTO:
+            case CMD_RET:
+            case CMD_SET_ITER:
+            case CMD_JUMP_ITER:
+            case CMD_ALU:
+            case CMD_SKIP_REG_ZERO:
+            case CMD_SKIP_REG_NOT_ZERO:
+            case CMD_PUSH:
+            case CMD_POP:
+                break;
+
+            default: break;
+        }
+        #undef PATCH_PTR
+        ptr += header->size;
+    }
+
+    PyObject *bytecode = PyBytes_FromStringAndSize((char *)blob, (Py_ssize_t)self->size);
+    PyMem_Free(blob);
+
+    // Return (bytecode, ref_list) - everything needed to recreate this buffer
+    return Py_BuildValue("NN", bytecode, Py_NewRef(self->ref_list));
+}
+
+static PyObject *CommandBuffer_meth_patch(CommandBuffer *self, PyObject *args) {
+    PyObject *bytecode_obj;
+    PyObject *ref_list;
+    
+    // Explicitly check for Bytes and List types
+    if (!PyArg_ParseTuple(args, "O!O!", &PyBytes_Type, &bytecode_obj, &PyList_Type, &ref_list)) {
+        return NULL;
+    }
+
+    Py_ssize_t bc_size = PyBytes_GET_SIZE(bytecode_obj);
+    if (CommandBuffer_ensure(self, (size_t)bc_size) < 0) return NULL;
+
+    // 1. Load the raw data
+    memcpy(self->data, PyBytes_AS_STRING(bytecode_obj), bc_size);
+    self->size = (size_t)bc_size;
+    self->recording = 0; // Finalize buffer
+
+    // 2. Indices -> Live Pointers (Relocation)
     uint8_t *ptr = self->data;
     uint8_t *end = ptr + self->size;
 
     while (ptr < end) {
-        if (ptr + sizeof(CmdHeader) > end) {
-            break; 
-        }
         CmdHeader *header = (CmdHeader *)ptr;
-
-        if (header->size < sizeof(CmdHeader) || ptr + header->size > end) {
-            // Bytecode is corrupted or malicious. Stop immediately.
-#ifdef DEBUG
-            fprintf(stderr, "[HyperGL] CommandBuffer Corrupted: size %u at offset %tu\n", 
-                    header->size, ptr - self->data);
-#endif
-            break; 
-        }
         
+        #define INFLATE_PTR(member) do { \
+            intptr_t idx; \
+            memcpy((void *)&idx, (const void *)&(member), sizeof(void *)); \
+            if (idx >= 0 && idx < PyList_GET_SIZE(ref_list)) { \
+                void *ptr_val = (void *)PyList_GET_ITEM(ref_list, idx); \
+                memcpy((void *)&(member), (const void *)&ptr_val, sizeof(void *)); \
+            } else if (idx == -1) { \
+                void *null_ptr = NULL; \
+                memcpy((void *)&(member), (const void *)&null_ptr, sizeof(void *)); \
+            } else { \
+                PyErr_SetString(PyExc_ValueError, "[HyperGL VM] Invalid reference index."); \
+                return NULL; \
+            } \
+        } while(0)
+
         switch (header->type) {
+            case CMD_BIND_PIPELINE:      INFLATE_PTR(((CmdBindPipeline*)ptr)->pipeline); break;
+            case CMD_BIND_COMPUTE:       INFLATE_PTR(((CmdBindCompute*)ptr)->compute); break;
+            case CMD_BIND_DESCRIPTOR_SET: INFLATE_PTR(((CmdBindDescriptorSet*)ptr)->set); break;
+            case CMD_DRAW_INDIRECT:      INFLATE_PTR(((CmdDrawIndirect*)ptr)->buffer); break;
+            case CMD_SKIP_IF_ZERO:
+            case CMD_SKIP_IF_NOT_ZERO:   INFLATE_PTR(((CmdSkip*)ptr)->buffer); break;
+            case CMD_LOAD_REG:           INFLATE_PTR(((CmdLoadReg*)ptr)->buffer); break;
+            case CMD_STORE_REG:          INFLATE_PTR(((CmdStoreReg*)ptr)->buffer); break;
+            case CMD_LOAD_REG_INDIRECT:
+            case CMD_STORE_REG_INDIRECT: INFLATE_PTR(((CmdMemIndirect*)ptr)->buffer); break;
+            case CMD_RET_IF_ZERO:
+            case CMD_RET_IF_NOT_ZERO:    INFLATE_PTR(((CmdRetCond*)ptr)->buffer); break;
+            case CMD_SIGNAL_FENCE:
+            case CMD_WAIT_FENCE:
+            case CMD_SKIP_IF_NOT_READY:  INFLATE_PTR(((CmdFence*)ptr)->fence); break;
+            case CMD_PRINT:              INFLATE_PTR(((CmdPrint*)ptr)->buffer); break;
+            case CMD_DUMP:               INFLATE_PTR(((CmdDump*)ptr)->buffer); break;
+            case CMD_CALL:               INFLATE_PTR(((CmdCall*)ptr)->other); break;
+
+            // Data-only instructions require no inflation
+            case CMD_NOP:
+            case CMD_CLEAR:
+            case CMD_DRAW:
+            case CMD_DISPATCH:
+            case CMD_BARRIER:
+            case CMD_GOTO:
+            case CMD_RET:
+            case CMD_SET_ITER:
+            case CMD_JUMP_ITER:
+            case CMD_ALU:
+            case CMD_SKIP_REG_ZERO:
+            case CMD_SKIP_REG_NOT_ZERO:
+            case CMD_PUSH:
+            case CMD_POP:
+                break;
+
+            default: break;
+        }
+        #undef INFLATE_PTR
+        ptr += header->size;
+    }
+
+    // 3. Update the internal reference list to keep the assets alive
+    Py_XSETREF(self->ref_list, Py_NewRef(ref_list));
+    Py_RETURN_NONE;
+}
+
+static PyObject *record_stack_op(CommandBuffer *self, PyObject *arg, int type) {
+    int reg = to_int(arg);
+    if (reg < 0 || reg > 7) return PyErr_Format(PyExc_ValueError, "Register must be 0-7");
+    if (!self->recording) return PyErr_Format(PyExc_RuntimeError, "Closed.");
+
+    if (CommandBuffer_ensure(self, sizeof(CmdStackOp)) < 0) return NULL;
+    CmdStackOp *cmd = (CmdStackOp *)(self->data + self->size);
+    cmd->header.type = type;
+    cmd->header.size = sizeof(CmdStackOp);
+    cmd->reg = (uint32_t)reg;
+    self->size += cmd->header.size;
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_push(CommandBuffer *self, PyObject *arg) {
+    return record_stack_op(self, arg, CMD_PUSH);
+}
+
+static PyObject *CommandBuffer_meth_pop(CommandBuffer *self, PyObject *arg) {
+    return record_stack_op(self, arg, CMD_POP);
+}
+
+/**
+ * Internal Recursive Executor for Command Buffers.
+ *
+ * @param self           The CommandBuffer to execute.
+ * @param depth          Current recursion depth (limit 16).
+ * @param active_pipe    Double pointer to track the current Graphics Pipeline across calls.
+ * @param active_compute Double pointer to track the current Compute Pipeline across calls.
+ * @return 0 on success, -1 on recursion error, -2 on Python signal (Ctrl+C).
+ */
+static int CommandBuffer_execute_internal(CommandBuffer *self, int depth, 
+                                          Pipeline **active_pipe, Compute **active_compute, uint32_t *regs, uint32_t **sp, uint32_t *stack_base) {
+    // 1. RECURSION SAFETY
+    if (UNLIKELY(depth > 16)) {
+        return -1; 
+    }
+
+    // VM registers are passed from the caller.
+
+    Context *ctx = self->ctx;
+    uint8_t *ptr = self->data;
+    uint8_t *end = ptr + self->size;
+    int instruction_count = 0;
+
+    while (ptr < end) {
+        // 2. YIELD POINT: Check for Ctrl+C every 1024 instructions
+        if (UNLIKELY(++instruction_count % 1024 == 0)) {
+            // Re-acquire GIL safely without needing macro-local variables
+            PyGILState_STATE gstate = PyGILState_Ensure();
+            int signal_result = PyErr_CheckSignals();
+            PyGILState_Release(gstate);
+
+            if (signal_result != 0) return -2; 
+        }
+
+        // 3. BYTECODE VALIDATION
+        if (UNLIKELY(ptr + sizeof(CmdHeader) > end)) break;
+        CmdHeader *header = (CmdHeader *)ptr;
+        if (UNLIKELY(header->size < sizeof(CmdHeader) || ptr + header->size > end)) break;
+
+        // 4. INSTRUCTION DISPATCH
+        switch (header->type) {
+            case CMD_NOP:
+                // Do nothing. The loop pointer 'ptr' will advance by header->size at the bottom.
+                break;
             case CMD_BIND_PIPELINE: {
                 CmdBindPipeline *c = (CmdBindPipeline *)ptr;
-                active_pipe = c->pipeline;
-                active_compute = NULL;
+                *active_pipe = c->pipeline;
+                *active_compute = NULL;
                 
-                bind_viewport_internal(ctx, &active_pipe->viewport);
-                bind_global_settings_internal(ctx, active_pipe->global_settings);
+                Pipeline *p = *active_pipe;
+                bind_viewport_internal(ctx, &p->viewport);
+                bind_global_settings_internal(ctx, p->global_settings);
                 
-                int fbo_id = active_pipe->framebuffer ? active_pipe->framebuffer->obj : ctx->default_framebuffer->obj;
+                // Bind FBO (Safe check for None/Default)
+                int fbo_id = p->framebuffer ? p->framebuffer->obj : ctx->default_framebuffer->obj;
                 bind_draw_framebuffer_internal(ctx, fbo_id);
                 
-                bind_program_internal(ctx, active_pipe->program->obj);
-                bind_vertex_array_internal(ctx, active_pipe->vertex_array->obj);
-                bind_descriptor_set_internal(ctx, active_pipe->descriptor_set);
-                if (active_pipe->uniforms) bind_uniforms(active_pipe);
+                bind_program_internal(ctx, p->program->obj);
+                bind_vertex_array_internal(ctx, p->vertex_array->obj);
+                bind_descriptor_set_internal(ctx, p->descriptor_set);
+                if (p->uniforms) bind_uniforms(p);
                 break;
             }
+
             case CMD_BIND_COMPUTE: {
                 CmdBindCompute *c = (CmdBindCompute *)ptr;
-                active_compute = c->compute;
-                active_pipe = NULL;
+                *active_compute = c->compute;
+                *active_pipe = NULL;
                 
-                bind_program_internal(ctx, active_compute->program->obj);
-                bind_descriptor_set_internal(ctx, active_compute->descriptor_set);
-                if (active_compute->uniforms) bind_uniforms((Pipeline*)active_compute);
+                Compute *comp = *active_compute;
+                bind_program_internal(ctx, comp->program->obj);
+                bind_descriptor_set_internal(ctx, comp->descriptor_set);
+                if (comp->uniforms) bind_uniforms((Pipeline*)comp);
                 break;
             }
+
             case CMD_BIND_DESCRIPTOR_SET: {
                 CmdBindDescriptorSet *c = (CmdBindDescriptorSet *)ptr;
                 bind_descriptor_set_internal(ctx, c->set);
                 break;
             }
-            case CMD_CLEAR: {
-                CmdClear *c = (CmdClear *)ptr;
-                glClear(c->mask);
-                break;
-            }
+
             case CMD_DRAW: {
-                if (active_pipe) {
+                Pipeline *p = *active_pipe;
+                if (LIKELY(p != NULL)) {
                     CmdDraw *c = (CmdDraw *)ptr;
-                    int vc = (c->vertex_count >= 0) ? c->vertex_count : active_pipe->params.vertex_count;
-                    int ic = (c->instance_count >= 0) ? c->instance_count : active_pipe->params.instance_count;
-                    int first = (c->first >= 0) ? c->first : active_pipe->params.first_vertex;
+                    int vc = (c->vertex_count >= 0) ? c->vertex_count : p->params.vertex_count;
+                    int ic = (c->instance_count >= 0) ? c->instance_count : p->params.instance_count;
+                    int first = (c->first >= 0) ? c->first : p->params.first_vertex;
                     
-                    if (active_pipe->index_type) {
-                        intptr off = (intptr)first * (intptr)active_pipe->index_size;
-                        glDrawElementsInstanced(active_pipe->topology, vc, active_pipe->index_type, off, ic);
+                    if (p->index_type) {
+                        intptr off = (intptr)first * (intptr)p->index_size;
+                        glDrawElementsInstanced(p->topology, vc, p->index_type, off, ic);
                     } else {
-                        glDrawArraysInstanced(active_pipe->topology, first, vc, ic);
+                        glDrawArraysInstanced(p->topology, first, vc, ic);
                     }
                 }
                 break;
             }
+
             case CMD_DRAW_INDIRECT: {
-                if (active_pipe) {
+                Pipeline *p = *active_pipe;
+                if (LIKELY(p != NULL)) {
                     CmdDrawIndirect *c = (CmdDrawIndirect *)ptr;
                     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, c->buffer->buffer);
-                    int s = c->stride != 0 ? c->stride : (active_pipe->index_type ? sizeof(DrawElementsIndirectCommand) : sizeof(DrawArraysIndirectCommand));
-                    void* off = (void*)(intptr_t)c->offset;
+                    int s = c->stride != 0 ? c->stride : (p->index_type ? sizeof(DrawElementsIndirectCommand) : sizeof(DrawArraysIndirectCommand));
                     
-                    // Auto-Barrier for Compute->Indirect feedback loops
                     glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+                    void* off = (void*)(intptr_t)c->offset;
 
-                    if (active_pipe->index_type) {
-                        glMultiDrawElementsIndirect(active_pipe->topology, active_pipe->index_type, off, c->count, s);
+                    if (p->index_type) {
+                        glMultiDrawElementsIndirect(p->topology, p->index_type, off, c->count, s);
                     } else {
-                        glMultiDrawArraysIndirect(active_pipe->topology, off, c->count, s);
+                        glMultiDrawArraysIndirect(p->topology, off, c->count, s);
                     }
                 }
                 break;
             }
+
             case CMD_DISPATCH: {
                 CmdDispatch *c = (CmdDispatch *)ptr;
                 glDispatchCompute(c->x, c->y, c->z);
                 break;
             }
+
             case CMD_BARRIER: {
                 CmdBarrier *c = (CmdBarrier *)ptr;
                 glMemoryBarrier(c->flags);
                 break;
             }
+
+            case CMD_CLEAR: {
+                CmdClear *c = (CmdClear *)ptr;
+                glClear(c->mask);
+                break;
+            }
+
+            case CMD_SKIP_IF_ZERO:
+            case CMD_SKIP_IF_NOT_ZERO: {
+                CmdSkip *c = (CmdSkip *)ptr;
+                
+                // 1. DEFENSIVE CHECK: Is the pointer still there?
+                // This handles buffers that were unmapped before submit() started.
+                if (UNLIKELY(!c->buffer->mapped_ptr)) {
+            #ifdef DEBUG
+                    fprintf(stderr, "[HyperGL VM] Warning: skip instruction hit an unmapped buffer. Skipping check.\n");
+            #endif
+                    break; // Don't skip the next command; just move on safely.
+                }
+
+                // 2. VOLATILE READ: 
+                // We cast to 'volatile uint32_t*' to tell the C compiler:
+                // "Don't cache this value in a CPU register. The GPU or another thread 
+                // might have changed it since the last time you looked."
+                volatile uint32_t *val_ptr = (volatile uint32_t *)((uint8_t *)c->buffer->mapped_ptr + c->offset);
+                
+                // Perform the read
+                uint32_t value = *val_ptr;
+
+                int condition = (header->type == CMD_SKIP_IF_ZERO) ? (value == 0) : (value != 0);
+
+                if (condition) {
+                    uint8_t *next_cmd_ptr = ptr + header->size;
+                    if (next_cmd_ptr < end) {
+                        CmdHeader *next_header = (CmdHeader *)next_cmd_ptr;
+                        ptr += next_header->size; 
+                    }
+                }
+                break;
+            }
+
+            case CMD_GOTO: {
+                CmdGoto *c = (CmdGoto *)ptr;
+                if (LIKELY(c->target_offset < self->size)) {
+                    // Adjust ptr. We subtract header->size because the loop end adds it back.
+                    ptr = (self->data + c->target_offset) - header->size;
+                } else {
+                    ptr = end; 
+                }
+                break;
+            }
+
+            case CMD_CALL: {
+                CmdCall *c = (CmdCall *)ptr;
+
+                if (UNLIKELY(c->other->recording)) {
+                    fprintf(stderr, "[HyperGL VM] Error: Attempted to CALL a CommandBuffer that is still recording.\n");
+                    return -1;
+                }
+
+                // 1. SAVE: Store current parent state on the C stack
+                Pipeline *parent_pipe = *active_pipe;
+                Compute *parent_compute = *active_compute;
+
+                // 2. EXECUTE: Child inherits parent state initially
+                int res = CommandBuffer_execute_internal(c->other, depth + 1, active_pipe, active_compute, regs, sp, stack_base);
+                if (UNLIKELY(res < 0)) return res;
+
+                // 3. RESTORE: Put the parent's pointers back
+                *active_pipe = parent_pipe;
+                *active_compute = parent_compute;
+
+                // 4. RE-SYNC: If the child changed the pipeline, the hardware state is now "dirty" 
+                // compared to our restored parent_pipe. We must re-bind the parent state.
+                if (*active_pipe) {
+                    Pipeline *p = *active_pipe;
+                    bind_viewport_internal(ctx, &p->viewport);
+                    bind_global_settings_internal(ctx, p->global_settings);
+                    int fbo_id = p->framebuffer ? p->framebuffer->obj : ctx->default_framebuffer->obj;
+                    bind_draw_framebuffer_internal(ctx, fbo_id);
+                    bind_program_internal(ctx, p->program->obj);
+                    bind_vertex_array_internal(ctx, p->vertex_array->obj);
+                    bind_descriptor_set_internal(ctx, p->descriptor_set);
+                    // Note: bind_internal functions are fast (O(1)) because they check 
+                    // ctx->current_id before making any driver calls.
+                } else if (*active_compute) {
+                    Compute *comp = *active_compute;
+                    bind_program_internal(ctx, comp->program->obj);
+                    bind_descriptor_set_internal(ctx, comp->descriptor_set);
+                }
+                break;
+            }
+
+            case CMD_PRINT: {
+                CmdPrint *c = (CmdPrint *)ptr;
+                if (c->buffer && c->buffer->mapped_ptr) {
+                    uint32_t *val_ptr = (uint32_t *)((uint8_t *)c->buffer->mapped_ptr + c->offset);
+                    fprintf(stderr, "[HyperGL VM] %s: %u\n", c->message, *val_ptr);
+                } else {
+                    fprintf(stderr, "[HyperGL VM] %s\n", c->message);
+                }
+                break;
+            }
+
+            case CMD_DUMP: {
+                CmdDump *c = (CmdDump *)ptr;
+                if (c->buffer && c->buffer->mapped_ptr) {
+                    uint8_t *base = (uint8_t *)c->buffer->mapped_ptr + c->offset;
+                    fprintf(stderr, "[HyperGL VM] %s (%u elements):\n  ", c->message, c->count);
+                    for (uint32_t i = 0; i < c->count; ++i) {
+                        if (c->stride == 0) fprintf(stderr, "[%u]: %.3f ", i, ((float *)base)[i]);
+                        else if (c->stride == 1) fprintf(stderr, "[%u]: %d ", i, ((int32_t *)base)[i]);
+                        else fprintf(stderr, "[%u]: %u ", i, ((uint32_t *)base)[i]);
+                        if ((i + 1) % 4 == 0) fprintf(stderr, "\n  ");
+                    }
+                    fprintf(stderr, "\n");
+                }
+                break;
+            }
+
+            case CMD_SIGNAL_FENCE: {
+                CmdFence *c = (CmdFence *)ptr;
+                if (c->fence->sync) glDeleteSync(c->fence->sync);
+                c->fence->sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+                break;
+            }
+
+            case CMD_WAIT_FENCE: {
+                CmdFence *c = (CmdFence *)ptr;
+                if (c->fence->sync) glWaitSync(c->fence->sync, 0, GL_TIMEOUT_IGNORED);
+                break;
+            }
+
+            case CMD_SKIP_IF_NOT_READY: {
+                CmdFence *c = (CmdFence *)ptr;
+                int ready = 0;
+                if (c->fence->sync) {
+                    GLenum res = glClientWaitSync(c->fence->sync, 0, 0);
+                    ready = (res == GL_ALREADY_SIGNALED || res == GL_CONDITION_SATISFIED);
+                }
+                if (!ready) {
+                    // Jump over the next instruction
+                    uint8_t *next_cmd_ptr = ptr + header->size;
+                    if (next_cmd_ptr < end) {
+                        CmdHeader *next_header = (CmdHeader *)next_cmd_ptr;
+                        ptr += next_header->size; 
+                    }
+                }
+                break;
+            }
+            case CMD_SET_ITER: {
+                CmdSetIter *c = (CmdSetIter *)ptr;
+                regs[c->reg & 7] = c->value;
+                break;
+            }
+
+            case CMD_JUMP_ITER: {
+                CmdJumpIter *c = (CmdJumpIter *)ptr;
+                uint32_t r_idx = c->reg & 7;
+                if (regs[r_idx] > 0) {
+                    regs[r_idx]--;
+                    if (regs[r_idx] > 0) {
+                        // JUMP: same logic as GOTO
+                        ptr = (self->data + c->target_offset) - header->size;
+                    }
+                }
+                break;
+            }
+            case CMD_STORE_REG: {
+                CmdStoreReg *c = (CmdStoreReg *)ptr;
+                
+                // Safety check for unmapped buffers
+                if (LIKELY(c->buffer->mapped_ptr != NULL)) {
+                    // Volatile write ensures the CPU actually commits this to RAM/VRAM
+                    // so that the GPU (via PCIe) or other threads see it.
+                    volatile uint32_t *dest = (volatile uint32_t *)((uint8_t *)c->buffer->mapped_ptr + c->offset);
+                    *dest = regs[c->reg & 7];
+                }
+                break;
+            }
+            case CMD_LOAD_REG: {
+                CmdLoadReg *c = (CmdLoadReg *)ptr;
+                if (LIKELY(c->buffer->mapped_ptr != NULL)) {
+                    volatile uint32_t *src = (volatile uint32_t *)((uint8_t *)c->buffer->mapped_ptr + c->offset);
+                    regs[c->reg & 7] = *src;
+                }
+                break;
+            }
+
+            case CMD_ALU: {
+                CmdAlu *c = (CmdAlu *)ptr;
+                uint32_t a = c->reg_a & 7;
+                uint32_t b = c->reg_b & 7;
+                switch (c->op) {
+                    case 0: regs[a] += regs[b]; break; // ADD
+                    case 1: regs[a] -= regs[b]; break; // SUB
+                    case 2: regs[a] *= regs[b]; break; // MUL
+                    case 3: if (regs[b] != 0) regs[a] /= regs[b]; break; // DIV (Safety check)
+                    case 4: regs[a] &= regs[b]; break; // AND
+                    case 5: regs[a] |= regs[b]; break; // OR
+                    default: break;
+                }
+                break;
+            }
+            case CMD_RET: {
+                return 0; // Exit this C function call
+            }
+
+            case CMD_RET_IF_ZERO:
+            case CMD_RET_IF_NOT_ZERO: {
+                CmdRetCond *c = (CmdRetCond *)ptr;
+                if (LIKELY(c->buffer->mapped_ptr != NULL)) {
+                    volatile uint32_t *val_ptr = (volatile uint32_t *)((uint8_t *)c->buffer->mapped_ptr + c->offset);
+                    int condition = (header->type == CMD_RET_IF_ZERO) ? (*val_ptr == 0) : (*val_ptr != 0);
+                    if (condition) {
+                        return 0; // Return to parent buffer
+                    }
+                }
+                break;
+            }
+            case CMD_SKIP_REG_ZERO:
+            case CMD_SKIP_REG_NOT_ZERO: {
+                CmdSkipReg *c = (CmdSkipReg *)ptr;
+                uint32_t val = regs[c->reg & 7];
+                int condition = (header->type == CMD_SKIP_REG_ZERO) ? (val == 0) : (val != 0);
+
+                if (condition) {
+                    uint8_t *next_ptr = ptr + header->size;
+                    if (next_ptr < end) {
+                        ptr += ((CmdHeader *)next_ptr)->size; 
+                    }
+                }
+                break;
+            }
+
+            case CMD_LOAD_REG_INDIRECT: {
+                CmdMemIndirect *c = (CmdMemIndirect *)ptr;
+                if (LIKELY(c->buffer->mapped_ptr != NULL)) {
+                    uint32_t idx = regs[c->index_reg & 7];
+                    uint32_t offset = c->base_offset + (idx * c->stride);
+                    // Bounds safety check: prevent reading past buffer end
+                    if (LIKELY(offset + 4 <= (uint32_t)c->buffer->size)) {
+                        volatile uint32_t *src = (volatile uint32_t *)((uint8_t *)c->buffer->mapped_ptr + offset);
+                        regs[c->reg & 7] = *src;
+                    }
+                }
+                break;
+            }
+
+            case CMD_STORE_REG_INDIRECT: {
+                CmdMemIndirect *c = (CmdMemIndirect *)ptr;
+                if (LIKELY(c->buffer->mapped_ptr != NULL)) {
+                    uint32_t idx = regs[c->index_reg & 7];
+                    uint32_t offset = c->base_offset + (idx * c->stride);
+                    // Bounds safety check: prevent corruption
+                    if (LIKELY(offset + 4 <= (uint32_t)c->buffer->size)) {
+                        volatile uint32_t *dest = (volatile uint32_t *)((uint8_t *)c->buffer->mapped_ptr + offset);
+                        *dest = regs[c->reg & 7];
+                    }
+                }
+                break;
+            }
+            case CMD_PUSH: {
+                CmdStackOp *c = (CmdStackOp *)ptr;
+                // STACK OVERFLOW CHECK: 128 is our limit
+                if (LIKELY((*sp - stack_base) < 128)) {
+                    **sp = regs[c->reg & 7];
+                    (*sp)++;
+                } else {
+                    fprintf(stderr, "[HyperGL VM] Error: Stack Overflow\n");
+                    return -1;
+                }
+                break;
+            }
+            case CMD_POP: {
+                CmdStackOp *c = (CmdStackOp *)ptr;
+                // STACK UNDERFLOW CHECK
+                if (LIKELY(*sp > stack_base)) {
+                    (*sp)--;
+                    regs[c->reg & 7] = **sp;
+                } else {
+                    fprintf(stderr, "[HyperGL VM] Error: Stack Underflow\n");
+                    return -1;
+                }
+                break;
+            }
             default: 
-                ptr = end; // Exit loop on corruption
+                ptr = end; // Opcode corruption safety
                 break;
         }
-        
-        // Single point of advancement
+
+        // 5. ADVANCE
         ptr += header->size;
     }
+    return 0;
+}
 
-    PyMutex_Unlock(&ctx->state_lock);
+static PyObject *CommandBuffer_meth_submit(CommandBuffer *self, PyObject *args) {
+    if (self->recording) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Cannot submit while recording. Call end() first.");
+        return NULL;
+    }
+    
+    if (CommandBuffer_resolve_labels(self) < 0) return NULL;
+
+    // --- VM STATE INITIALIZATION ---
+    Pipeline *active_pipe = NULL;
+    Compute *active_compute = NULL;
+    
+    // The register file (8 registers)
+    uint32_t regs[8] = {0}; 
+    
+    // The VM Stack (128 entries is plenty for 16 levels of recursion)
+    uint32_t vm_stack[128]; 
+    uint32_t *sp = vm_stack; // The moving pointer
+    
+    int result = 0;
+
+    Py_BEGIN_ALLOW_THREADS
+    PyMutex_Lock(&self->ctx->state_lock);
+    
+    // Pass all 6 required arguments. 
+    // We pass '&sp' so the pointer itself can be modified by child calls.
+    result = CommandBuffer_execute_internal(self, 0, &active_pipe, &active_compute, regs, &sp, vm_stack);
+    
+    PyMutex_Unlock(&self->ctx->state_lock);
     Py_END_ALLOW_THREADS
+
+    if (result == -2) return NULL; // Ctrl+C handling
+    if (result == -1) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL VM] Recursion Limit Exceeded or Closed Buffer Called.");
+        return NULL;
+    }
+
     Py_RETURN_NONE;
 }
 
@@ -7174,6 +8350,8 @@ static PyObject *CommandBuffer_new(PyTypeObject *type, PyObject *args, PyObject 
         self->capacity = 4096; // 4KB start
         self->data = PyMem_Malloc(self->capacity);
         self->ref_list = PyList_New(0);
+        self->labels = PyDict_New();
+        self->fixups = PyList_New(0);
         self->recording = 1;
         if (!self->data || !self->ref_list) {
             Py_DECREF(self);
@@ -7189,6 +8367,8 @@ static void CommandBuffer_dealloc(CommandBuffer *self) {
     if (self->data) PyMem_Free(self->data);
     Py_XDECREF(self->ref_list);
     Py_XDECREF(self->ctx);
+    Py_XDECREF(self->labels);
+    Py_XDECREF(self->fixups);
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
@@ -7196,12 +8376,16 @@ static void CommandBuffer_dealloc(CommandBuffer *self) {
 static int CommandBuffer_traverse(CommandBuffer *self, visitproc visit, void *arg) {
     Py_VISIT(self->ref_list);
     Py_VISIT(self->ctx);
+    Py_VISIT(self->labels);
+    Py_VISIT(self->fixups);
     return 0;
 }
 
 static int CommandBuffer_clear(CommandBuffer *self) {
     Py_CLEAR(self->ref_list);
     Py_CLEAR(self->ctx);
+    Py_CLEAR(self->labels);
+    Py_CLEAR(self->fixups);
     return 0;
 }
 
@@ -7362,16 +8546,68 @@ static PyMethodDef Fence_methods[] = {
 };
 
 static PyMethodDef CommandBuffer_methods[] = {
-    {"bind_pipeline", (PyCFunction)CommandBuffer_meth_bind_pipeline, METH_VARARGS, NULL},
-    {"bind_compute", (PyCFunction)CommandBuffer_meth_bind_compute, METH_VARARGS, NULL},
+    // --- Lifecycle & Management ---
+    {"begin",               (PyCFunction)CommandBuffer_meth_begin,               METH_NOARGS,  NULL},
+    {"end",                 (PyCFunction)CommandBuffer_meth_end,                 METH_NOARGS,  NULL},
+    {"submit",              (PyCFunction)CommandBuffer_meth_submit,              METH_NOARGS,  NULL},
+    {"tell",                (PyCFunction)CommandBuffer_meth_tell,                METH_NOARGS,  NULL},
+    {"nop",                 (PyCFunction)CommandBuffer_meth_nop,                 METH_VARARGS, NULL},
+    {"erase",               (PyCFunction)CommandBuffer_meth_erase,               METH_O,       NULL},
+
+    // --- Graphics Operations ---
+    {"clear",               (PyCFunction)CommandBuffer_meth_clear,               METH_VARARGS, NULL},
+    {"bind_pipeline",       (PyCFunction)CommandBuffer_meth_bind_pipeline,       METH_VARARGS, NULL},
     {"bind_descriptor_set", (PyCFunction)CommandBuffer_meth_bind_descriptor_set, METH_VARARGS, NULL},
-    {"clear", (PyCFunction)CommandBuffer_meth_clear, METH_VARARGS, NULL},
-    {"draw", (PyCFunction)CommandBuffer_meth_draw, METH_VARARGS | METH_KEYWORDS, NULL},
-    {"draw_indirect", (PyCFunction)CommandBuffer_meth_draw_indirect, METH_VARARGS | METH_KEYWORDS, NULL},
-    {"dispatch", (PyCFunction)CommandBuffer_meth_dispatch, METH_VARARGS, NULL},
-    {"barrier", (PyCFunction)CommandBuffer_meth_barrier, METH_VARARGS, NULL},
-    {"submit", (PyCFunction)CommandBuffer_meth_submit, METH_NOARGS, NULL},
+    {"draw",                (PyCFunction)CommandBuffer_meth_draw,                METH_VARARGS | METH_KEYWORDS, NULL},
+    {"draw_indirect",       (PyCFunction)CommandBuffer_meth_draw_indirect,       METH_VARARGS | METH_KEYWORDS, NULL},
+
+    // --- Compute Operations ---
+    {"bind_compute",        (PyCFunction)CommandBuffer_meth_bind_compute,        METH_VARARGS, NULL},
+    {"dispatch",            (PyCFunction)CommandBuffer_meth_dispatch,            METH_VARARGS, NULL},
+    {"barrier",             (PyCFunction)CommandBuffer_meth_barrier,             METH_VARARGS, NULL},
+
+    // --- Control Flow (Branching & Subroutines) ---
+    {"label",               (PyCFunction)CommandBuffer_meth_label,               METH_O,       NULL},
+    {"goto",                (PyCFunction)CommandBuffer_meth_goto,                METH_O,       NULL},
+    {"call",                (PyCFunction)CommandBuffer_meth_call,                METH_O,       NULL},
+    {"ret",                 (PyCFunction)CommandBuffer_meth_ret,                 METH_NOARGS,  NULL},
+    {"ret_if_zero",         (PyCFunction)CommandBuffer_meth_ret_if_zero,         METH_VARARGS | METH_KEYWORDS, NULL},
+    {"ret_if_not_zero",     (PyCFunction)CommandBuffer_meth_ret_if_not_zero,     METH_VARARGS | METH_KEYWORDS, NULL},
+    {"skip_if_zero",        (PyCFunction)CommandBuffer_meth_skip_if_zero,        METH_VARARGS | METH_KEYWORDS, NULL},
+    {"skip_if_not_zero",    (PyCFunction)CommandBuffer_meth_skip_if_not_zero,    METH_VARARGS | METH_KEYWORDS, NULL},
+    {"skip_reg_zero",       (PyCFunction)CommandBuffer_meth_skip_reg_zero,       METH_O,       NULL},
+    {"skip_reg_not_zero",   (PyCFunction)CommandBuffer_meth_skip_reg_not_zero,   METH_O,       NULL},
+    {"load_reg_indirect",   (PyCFunction)CommandBuffer_meth_load_reg_indirect,   METH_VARARGS | METH_KEYWORDS, NULL},
+    {"store_reg_indirect",  (PyCFunction)CommandBuffer_meth_store_reg_indirect,  METH_VARARGS | METH_KEYWORDS, NULL},
+    {"push",                (PyCFunction)CommandBuffer_meth_push,                METH_O,       NULL},
+    {"pop",                 (PyCFunction)CommandBuffer_meth_pop,                 METH_O,       NULL},
+
+    // --- Register & ALU Operations ---
+    {"set_iter",            (PyCFunction)CommandBuffer_meth_set_iter,            METH_VARARGS, NULL},
+    {"jump_iter",           (PyCFunction)CommandBuffer_meth_jump_iter,           METH_VARARGS, NULL},
+    {"load_reg",            (PyCFunction)CommandBuffer_meth_load_reg,            METH_VARARGS | METH_KEYWORDS, NULL},
+    {"store_reg",           (PyCFunction)CommandBuffer_meth_store_reg,           METH_VARARGS | METH_KEYWORDS, NULL},
+    {"alu",                 (PyCFunction)CommandBuffer_meth_alu,                 METH_VARARGS | METH_KEYWORDS, NULL},
+
+    // --- Synchronization ---
+    {"signal",              (PyCFunction)CommandBuffer_meth_signal,              METH_O,       NULL},
+    {"wait",                (PyCFunction)CommandBuffer_meth_wait,                METH_O,       NULL},
+    {"skip_if_not_ready",   (PyCFunction)CommandBuffer_meth_skip_if_not_ready,   METH_O,       NULL},
+
+    // --- Debugging & Introspection ---
+    {"print",               (PyCFunction)CommandBuffer_meth_print,               METH_VARARGS | METH_KEYWORDS, NULL},
+    {"dump",                (PyCFunction)CommandBuffer_meth_dump,                METH_VARARGS | METH_KEYWORDS, NULL},
+
+    // --- Relocation ---
+    {"serialize",           (PyCFunction)CommandBuffer_meth_serialize,           METH_NOARGS,  NULL},
+    {"patch",               (PyCFunction)CommandBuffer_meth_patch,               METH_VARARGS, NULL},
+
     {NULL}
+};
+
+static PyMemberDef CommandBuffer_members[] = {
+    {"ctx", Py_T_OBJECT_EX, offsetof(CommandBuffer, ctx), Py_READONLY, "The context this buffer belongs to"},
+    {0}
 };
 
 // -----------------------------------------------------------------------------
@@ -7469,6 +8705,7 @@ static PyType_Slot CommandBuffer_slots[] = {
     {Py_tp_traverse, CommandBuffer_traverse},
     {Py_tp_clear, CommandBuffer_clear},
     {Py_tp_methods, CommandBuffer_methods},
+    {Py_tp_members, CommandBuffer_members},
     {0}
 };
 

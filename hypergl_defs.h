@@ -848,14 +848,55 @@ typedef enum ImageFormatTupleIndex {
 // --- Command Buffer Definitions ---
 
 typedef enum CommandType {
-    CMD_BIND_PIPELINE = 1,
-    CMD_BIND_DESCRIPTOR_SET = 2,
-    CMD_BIND_COMPUTE = 3,
-    CMD_DRAW = 4,
-    CMD_DRAW_INDIRECT = 5,
-    CMD_DISPATCH = 6,
-    CMD_BARRIER = 7,
-    CMD_CLEAR = 8
+    CMD_NOP                 = 0,
+    
+    // --- Graphics (1-9) ---
+    CMD_CLEAR               = 1,
+    CMD_BIND_PIPELINE       = 2,
+    CMD_BIND_DESCRIPTOR_SET = 3,
+    CMD_DRAW                = 4,
+    CMD_DRAW_INDIRECT       = 5,
+
+    // --- Compute (10-14) ---
+    CMD_BIND_COMPUTE        = 10,
+    CMD_DISPATCH            = 11,
+    CMD_BARRIER             = 12,
+
+    // --- Control Flow (15-19) ---
+    CMD_LABEL               = 15, // (Usually handled by compiler/fixup)
+    CMD_GOTO                = 16,
+    CMD_CALL                = 17,
+    CMD_RET                 = 18,
+
+    // --- Memory Branching (20-24) ---
+    CMD_SKIP_IF_ZERO        = 20,
+    CMD_SKIP_IF_NOT_ZERO    = 21,
+    CMD_RET_IF_ZERO         = 22,
+    CMD_RET_IF_NOT_ZERO     = 23,
+
+    // --- Registers & ALU (25-29) ---
+    CMD_SET_ITER            = 25,
+    CMD_JUMP_ITER           = 26,
+    CMD_LOAD_REG            = 27,
+    CMD_STORE_REG           = 28,
+    CMD_ALU                 = 29,
+
+    // --- Indirect Memory (30-34) ---
+    CMD_LOAD_REG_INDIRECT   = 30,
+    CMD_STORE_REG_INDIRECT  = 31,
+    CMD_SKIP_REG_ZERO       = 32,
+    CMD_SKIP_REG_NOT_ZERO   = 33,
+
+    // --- Stack & Sync (35+) ---
+    CMD_PUSH                = 35,
+    CMD_POP                 = 36,
+    CMD_SIGNAL_FENCE        = 40,
+    CMD_WAIT_FENCE          = 41,
+    CMD_SKIP_IF_NOT_READY   = 42,
+
+    // --- Debug (100+) ---
+    CMD_PRINT               = 100,
+    CMD_DUMP                = 101
 } CommandType;
 
 typedef struct CmdHeader {
@@ -913,6 +954,106 @@ typedef struct CmdClear {
     int32_t _pad;
 } CmdClear;
 
+typedef struct CmdSkip {
+    CmdHeader header;
+    Buffer *buffer;
+    uint32_t offset;
+    uint32_t _pad;
+} CmdSkip;
+
+typedef struct CmdGoto {
+    CmdHeader header;
+    uint32_t target_offset; // Absolute offset from self->data
+    uint32_t _pad;
+} CmdGoto;
+
+typedef struct CmdPrint {
+    CmdHeader header;
+    Buffer *buffer;    // If NULL, just prints message
+    uint32_t offset;   // Offset in buffer to peek at
+    char message[44];  // Static message (Total struct size: 64 bytes)
+} CmdPrint;
+
+typedef struct CmdDump {
+    CmdHeader header;
+    Buffer *buffer;
+    uint32_t offset;
+    uint32_t count;    // Number of elements to print
+    uint32_t stride;   // Type: 0=float, 1=int, 2=uint
+    char message[32];  // Prefix message (Struct total: 64 bytes)
+} CmdDump;
+
+typedef struct CmdCall {
+    CmdHeader header;
+    struct CommandBuffer *other; // The child buffer to execute
+} CmdCall;
+
+typedef struct CmdFence {
+    CmdHeader header;
+    Fence *fence;
+} CmdFence;
+
+typedef struct CmdSetIter {
+    CmdHeader header;
+    uint32_t reg;
+    uint32_t value;
+} CmdSetIter;
+
+typedef struct CmdJumpIter {
+    CmdHeader header;
+    uint32_t reg;
+    uint32_t target_offset;
+} CmdJumpIter;
+
+typedef struct CmdStoreReg {
+    CmdHeader header;
+    Buffer *buffer;
+    uint32_t reg;
+    uint32_t offset;
+} CmdStoreReg;
+
+typedef struct CmdLoadReg {
+    CmdHeader header;
+    Buffer *buffer;
+    uint32_t reg;
+    uint32_t offset;
+} CmdLoadReg;
+
+typedef struct CmdAlu {
+    CmdHeader header;
+    uint32_t reg_a;
+    uint32_t reg_b;
+    uint32_t op; // 0=add, 1=sub, 2=mul, 3=div, 4=and, 5=or
+} CmdAlu;
+
+typedef struct CmdRetCond {
+    CmdHeader header;
+    Buffer *buffer;
+    uint32_t offset;
+    uint32_t _pad;
+} CmdRetCond;
+
+typedef struct CmdSkipReg {
+    CmdHeader header;
+    uint32_t reg;
+    uint32_t _pad;
+} CmdSkipReg;
+
+typedef struct CmdMemIndirect {
+    CmdHeader header;
+    Buffer *buffer;
+    uint32_t reg;        // The data register (to load into or store from)
+    uint32_t index_reg;  // The register holding the array index
+    uint32_t base_offset;
+    uint32_t stride;
+} CmdMemIndirect;
+
+typedef struct CmdStackOp {
+    CmdHeader header;
+    uint32_t reg;
+    uint32_t _pad;
+} CmdStackOp;
+
 typedef struct CommandBuffer {
     PyObject_HEAD
     Context *ctx;
@@ -926,7 +1067,9 @@ typedef struct CommandBuffer {
     // We must keep references to every Pipeline, Buffer, etc. used in the recording
     // so they don't get GC'd while this buffer exists.
     PyObject *ref_list; 
-    
+    // --- LABEL SYSTEM ---
+    PyObject *labels;   // Dictionary: { "name": offset }
+    PyObject *fixups;   // List of tuples: (bytecode_offset_to_patch, "label_name")
     int recording;
 } CommandBuffer;
 
