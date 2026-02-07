@@ -20,7 +20,10 @@ Image = getattr(_hypergl_c, 'Image', None)
 Pipeline = getattr(_hypergl_c, 'Pipeline', None)
 Compute = getattr(_hypergl_c, 'Compute', None)
 Fence = getattr(_hypergl_c, 'Fence', None)
-CommandBuffer = getattr(_hypergl_c, 'CommandBuffer', None) # <--- Added
+CommandBuffer = getattr(_hypergl_c, 'CommandBuffer', None)
+
+# Exception
+Error = getattr(_hypergl_c, 'Error', None)
 
 # Export Constants and Compiler constructs from _hypergl.py
 from ._hypergl import (
@@ -31,15 +34,16 @@ from ._hypergl import (
     TIMEOUT_IGNORED, 
     SYNC_GPU_COMMANDS_COMPLETE, 
     SYNC_FLUSH_COMMANDS_BIT,
-    SceneCompiler,  # <--- Added
-    subroutine      # <--- Added
+    SceneCompiler,
+    subroutine
 )
 
 __all__ = [
+    'Error',
     'init', 'cleanup', 'context', 'loader', 'inspect',
     'Context', 'Buffer', 'Image', 'Pipeline', 'Compute', 'Fence', 'CommandBuffer',
     'bind', 'camera', 'calcsize',
-    'SceneCompiler', 'subroutine', # <--- Added
+    'SceneCompiler', 'subroutine',
     # Constants
     'ALREADY_SIGNALED', 'TIMEOUT_EXPIRED', 'CONDITION_SATISFIED', 'WAIT_FAILED',
     'TIMEOUT_IGNORED', 'SYNC_GPU_COMMANDS_COMPLETE', 'SYNC_FLUSH_COMMANDS_BIT'
