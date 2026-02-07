@@ -5459,6 +5459,8 @@ Pipeline_meth_render(const Pipeline *self,
     glDrawArraysInstanced(self->topology, params->first_vertex,
                           params->vertex_count, params->instance_count);
   }
+  if (self->ctx->last_work_fence) glDeleteSync(self->ctx->last_work_fence);
+  self->ctx->last_work_fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
 
   PyMutex_Unlock(&self->ctx->state_lock);
 
@@ -5652,6 +5654,9 @@ static PyObject *Compute_meth_run(Compute *self, PyObject *args, PyObject *kwarg
   glMemoryBarrier(GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT |
                   GL_SHADER_STORAGE_BARRIER_BIT | 
                   GL_COMMAND_BARRIER_BIT);
+
+  if (self->ctx->last_work_fence) glDeleteSync(self->ctx->last_work_fence);
+  self->ctx->last_work_fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
 
   PyMutex_Unlock(&self->ctx->state_lock);
 
