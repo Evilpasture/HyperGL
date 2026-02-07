@@ -3327,6 +3327,8 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
   res->current_descriptor_set = NULL;
   res->current_global_settings = NULL;
 
+  res->vm_seed = (uint32_t)time(NULL) ^ 0x9E3779B9;
+
   memset(&res->stats, 0, sizeof(ContextStats));
 
   // Setting trackers to -1 ensures that the first call to any binding 
@@ -8093,6 +8095,7 @@ static PyObject *CommandBuffer_meth_serialize(CommandBuffer *self, PyObject *Py_
             case CMD_POP:
             case CMD_SET_UNIFORM:
             case CMD_ASSERT_REG:
+            case CMD_GEN_RAND:
                 break;
 
             default: break;
@@ -8245,6 +8248,7 @@ static PyObject *CommandBuffer_meth_patch(CommandBuffer *self, PyObject *args) {
             case CMD_POP:
             case CMD_SET_UNIFORM:
             case CMD_ASSERT_REG:
+            case CMD_GEN_RAND:
                 break;
 
             default: 
@@ -8427,6 +8431,7 @@ static const char* hgl_get_op_name(uint32_t type) {
         case CMD_PRINT: return "PRINT";
         case CMD_DUMP: return "DUMP";
         case CMD_ASSERT_REG: return "ASSERT_REG";
+        case CMD_GEN_RAND: return "GEN_RAND";
         default: return "UNKNOWN";
     }
 }
@@ -8583,6 +8588,21 @@ static PyObject *CommandBuffer_meth_disassemble(CommandBuffer *self, PyObject *P
         ptr += header->size;
     }
     return res;
+}
+
+static PyObject *CommandBuffer_meth_gen_rand(CommandBuffer *self, PyObject *arg) {
+    int reg = to_int(arg);
+    if (reg < 0 || reg > 7) return PyErr_Format(PyExc_ValueError, "Register 0-7 required");
+
+    if (CommandBuffer_ensure(self, sizeof(CmdGenRand)) < 0) return NULL;
+
+    CmdGenRand *cmd = (CmdGenRand *)(self->data + self->size);
+    cmd->header.type = CMD_GEN_RAND;
+    cmd->header.size = sizeof(CmdGenRand);
+    cmd->reg = (uint32_t)reg;
+
+    self->size += sizeof(CmdGenRand);
+    Py_RETURN_NONE;
 }
 
 /**
@@ -9210,6 +9230,18 @@ static int CommandBuffer_execute_internal(CommandBuffer *self, int depth,
         if (UNLIKELY(!pass)) return HGL_STATUS_ERR_ASSERT;
         break;
     }
+    case CMD_GEN_RAND: {
+        CmdGenRand *c = (CmdGenRand *)ptr;
+        // Xorshift32 algorithm: Fast, deterministic, and GIL-free.
+        uint32_t x = ctx->vm_seed;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        ctx->vm_seed = x; // Update global context seed
+        
+        regs[c->reg & 7] = x;
+        break;
+    }
     default:
       // If we reach here, the 'header->type' is not a known CMD_...
       // This usually means bytecode corruption or memory misalignment.
@@ -9568,7 +9600,7 @@ static PyMethodDef CommandBuffer_methods[] = {
     {"load_reg",            (PyCFunction)CommandBuffer_meth_load_reg,            METH_VARARGS | METH_KEYWORDS, NULL},
     {"store_reg",           (PyCFunction)CommandBuffer_meth_store_reg,           METH_VARARGS | METH_KEYWORDS, NULL},
     {"alu",                 (PyCFunction)CommandBuffer_meth_alu,                 METH_VARARGS | METH_KEYWORDS, NULL},
-
+    {"gen_rand",            (PyCFunction)CommandBuffer_meth_gen_rand,            METH_O,       NULL},
     // --- Synchronization ---
     {"signal",              (PyCFunction)CommandBuffer_meth_signal,              METH_O,       NULL},
     {"wait",                (PyCFunction)CommandBuffer_meth_wait,                METH_O,       NULL},
