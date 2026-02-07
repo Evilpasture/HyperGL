@@ -2862,16 +2862,19 @@ static void internal_safe_flush(SharedTrash *shared) {
     TrashItem *to_delete = NULL;
     size_t count = 0;
 
+    TrashItem *new_bin = PyMem_Malloc(shared->capacity * sizeof(TrashItem));
+    if (!new_bin) return; // Allocation failed, try again next flush
+
     PyMutex_Lock(&shared->lock);
     if (shared->count > 0) {
         count = shared->count;
-        to_delete = shared->bin;
-        
-        // Reset the bin
-        shared->bin = PyMem_Malloc(shared->capacity * sizeof(TrashItem));
+        to_delete = shared->bin;      // Take the old full bin
+        shared->bin = new_bin;        // Give it the new empty bin
         shared->count = 0;
+        new_bin = NULL;               // Prevent freeing below
     }
     PyMutex_Unlock(&shared->lock);
+    if (new_bin) PyMem_Free(new_bin);
 
     if (!to_delete) return;
 
@@ -2888,7 +2891,15 @@ static void internal_safe_flush(SharedTrash *shared) {
             case TRASH_SHADER:       glDeleteShader(id); break;
             case TRASH_SAMPLER:      glDeleteSamplers(1, &id); break;
             case TRASH_QUERY:        glDeleteQueries(1, &id); break;
-            case TRASH_FENCE:        glDeleteSync((GLsync)(uintptr_t)to_delete[i].id); break;
+            case TRASH_FENCE: {
+                // Treat the ID as a byte-offset from address 0
+                GLsync sync_obj = (GLsync)((char *)NULL + (uintptr_t)to_delete[i].id);
+                
+                if (sync_obj != NULL) {
+                    glDeleteSync(sync_obj);
+                }
+                break;
+            }
             default: continue;
         }
     }
@@ -2898,88 +2909,69 @@ static void internal_safe_flush(SharedTrash *shared) {
 // Flush Trash using SharedTrash (Thread-Safe)
 void flush_trash(const Context *self) {
   SharedTrash *shared = self->trash_shared;
-  if (!shared) {
-    return;
-  }
+  if (!shared) return;
+
+  // 1. PRE-ALLOCATE OUTSIDE THE LOCK
+  // We prepare a "Spare Bin" before entering the critical section.
+  TrashItem *spare_bin = PyMem_Malloc(shared->capacity * sizeof(TrashItem));
+  if (!spare_bin) return; // Out of memory, try again next frame.
 
   TrashItem *to_delete = NULL;
   size_t count = 0;
-  // int invalid_type = 0;
 
-  // CRITICAL SECTION: Just swap the pointer!
+  // 2. CRITICAL SECTION (Extremely Short)
   PyMutex_Lock(&shared->lock);
   if (shared->count > 0) {
+    // STEAL the full bin
+    to_delete = shared->bin; 
     count = shared->count;
-    to_delete = shared->bin; // Steal the full bin
-
-    // Allocate a new empty bin for the producers
-    size_t old_capacity = shared->capacity;
-    shared->bin = PyMem_Malloc(old_capacity * sizeof(TrashItem));
-    if (shared->bin) {
-      shared->capacity = old_capacity;
-      shared->count = 0;
-    } else {
-      shared->bin = to_delete;
-      shared->count = count;
-      to_delete = NULL;
-    }
+    
+    // INSTALL the spare bin
+    shared->bin = spare_bin; 
+    shared->count = 0;
+    
+    // Mark that we no longer own the spare_bin pointer
+    spare_bin = NULL; 
   }
   PyMutex_Unlock(&shared->lock);
 
-  if (!to_delete) {
-    return;
+  // 3. CLEANUP
+  if (spare_bin) {
+    // If the trash was already empty, free the unused spare.
+    PyMem_Free(spare_bin);
   }
+
+  if (!to_delete) return;
 
   if (self->is_lost) {
     PyMem_Free(to_delete);
     return;
   }
-  // Delete OpenGL resources OUTSIDE the lock
-  Py_BEGIN_ALLOW_THREADS for (size_t i = 0; i < count; i++) {
+
+  // 4. GPU DELETION (Outside the lock, allowing producers to keep enqueuing)
+  Py_BEGIN_ALLOW_THREADS 
+  for (size_t i = 0; i < count; i++) {
     uint64_t raw_id = to_delete[i].id;
     unsigned int id = (unsigned int)raw_id;
-    if (raw_id == 0) {
-      continue;
-    }
+    if (raw_id == 0) continue;
+
     switch (to_delete[i].type) {
-    case TRASH_BUFFER:
-      glDeleteBuffers(1, &id);
-      break;
-    case TRASH_TEXTURE:
-      glDeleteTextures(1, &id);
-      break;
-    case TRASH_RENDERBUFFER:
-      glDeleteRenderbuffers(1, &id);
-      break;
-    case TRASH_FRAMEBUFFER:
-      glDeleteFramebuffers(1, &id);
-      break;
-    case TRASH_VERTEX_ARRAY:
-      glDeleteVertexArrays(1, &id);
-      break;
-    case TRASH_PROGRAM:
-      glDeleteProgram(id);
-      break;
-    case TRASH_SHADER:
-      glDeleteShader(id);
-      break;
-    case TRASH_SAMPLER:
-      glDeleteSamplers(1, &id);
-      break;
-    case TRASH_QUERY:
-      glDeleteQueries(1, &id);
-      break;
-    case TRASH_FENCE:
-      glDeleteSync((GLsync)(uintptr_t)raw_id);
-      break;
-    default: {
-      continue;
-    }
+      case TRASH_BUFFER:      glDeleteBuffers(1, &id); break;
+      case TRASH_TEXTURE:     glDeleteTextures(1, &id); break;
+      case TRASH_RENDERBUFFER: glDeleteRenderbuffers(1, &id); break;
+      case TRASH_FRAMEBUFFER:  glDeleteFramebuffers(1, &id); break;
+      case TRASH_VERTEX_ARRAY: glDeleteVertexArrays(1, &id); break;
+      case TRASH_PROGRAM:      glDeleteProgram(id); break;
+      case TRASH_SHADER:       glDeleteShader(id); break;
+      case TRASH_SAMPLER:      glDeleteSamplers(1, &id); break;
+      case TRASH_QUERY:        glDeleteQueries(1, &id); break;
+      case TRASH_FENCE:        glDeleteSync((GLsync)((char *)NULL + (uintptr_t)raw_id)); break;
+      default: continue;
     }
   }
   Py_END_ALLOW_THREADS
 
-      PyMem_Free(to_delete);
+  PyMem_Free(to_delete);
 }
 
 static void enqueue_trash(SharedTrash *trash, uint64_t id, int type) {
