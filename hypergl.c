@@ -4241,7 +4241,7 @@ static Image *Context_meth_image(Context *self, PyObject *args,
   ModuleState *state = self->module_state;
   static char *keywords[] = {"size",     "format", "data",    "samples",
                              "array",    "levels", "texture", "cubemap",
-                             "external", NULL};
+                             "external", "name",  NULL};
 
   int width;
   int height;
@@ -4250,14 +4250,15 @@ static Image *Context_meth_image(Context *self, PyObject *args,
   int cubemap = 0;
   int levels = 1;
   int external = 0;
+  const char *name = "unnamed_image";
   PyObject *format = state->str_rgba8unorm;
   PyObject *data = Py_None;
   PyObject *texture = Py_None;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "(ii)|O!OiiiOpi", keywords,
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "(ii)|O!OiiiOpiz", keywords,
                                    &width, &height, &PyUnicode_Type, &format,
                                    &data, &samples, &array, &levels, &texture,
-                                   &cubemap, &external)) {
+                                   &cubemap, &external, &name)) {
     return NULL;
   }
 
@@ -4386,6 +4387,7 @@ static Image *Context_meth_image(Context *self, PyObject *args,
   res->array = array;
   res->cubemap = cubemap;
   res->target = target;
+  snprintf(res->name, sizeof(res->name), "%s", name);
   res->renderbuffer = renderbuffer;
   res->external = external;
   res->layer_count = (array ? array : 1) * (cubemap ? 6 : 1);
