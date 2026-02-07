@@ -1,6 +1,8 @@
 # MIT License
 # Copyright (c) 2024 Szabolcs Dombi
 
+# Stub file for HyperGL with rich docstrings.
+
 from typing import Any, Dict, Iterable, List, Literal, Protocol, Tuple, TypedDict, Optional, Union, Iterator, Callable, TypeVar, ParamSpec
 
 # --- Enums and Literals ---
@@ -113,6 +115,8 @@ BufferAccess = Literal[
 ]
 """Usage hints for Buffer memory allocation."""
 
+UniformType = Literal['float', 'int', 'uint']
+
 SYNC_GPU_COMMANDS_COMPLETE: int
 SYNC_FLUSH_COMMANDS_BIT: int
 ALREADY_SIGNALED: int
@@ -130,9 +134,11 @@ class BufferView:
     """
     pass
 
+# Common Aliases
 Vec3 = Tuple[float, float, float]
 Viewport = Tuple[int, int, int, int]
 Data = bytes | bytearray | memoryview | BufferView | Any
+UniformMap = Dict[str, Any]
 
 class LayoutBinding(TypedDict, total=False):
     """Defines a binding index for a named resource in a shader."""
@@ -143,7 +149,7 @@ class BufferResource(TypedDict, total=False):
     """Descriptor for binding a Uniform Buffer."""
     type: Literal['uniform_buffer']
     binding: int
-    buffer: Buffer
+    buffer: 'Buffer'
     offset: int
     size: int
 
@@ -151,7 +157,7 @@ class StorageBufferResource(TypedDict, total=False):
     """Descriptor for binding a Shader Storage Buffer."""
     type: Literal['storage_buffer']
     binding: int
-    buffer: Buffer
+    buffer: 'Buffer'
     offset: int
     size: int
 
@@ -159,7 +165,7 @@ class SamplerResource(TypedDict, total=False):
     """Descriptor for binding a Texture/Sampler pair."""
     type: Literal['sampler']
     binding: int
-    image: Image
+    image: 'Image'
     min_filter: MinFilter
     mag_filter: MagFilter
     min_lod: float
@@ -172,9 +178,18 @@ class SamplerResource(TypedDict, total=False):
     compare_func: CompareFunc
     max_anisotropy: float
 
+# Resource Aliases
+PipelineResource = BufferResource | SamplerResource
+ComputeResource = BufferResource | SamplerResource | StorageBufferResource
+FramebufferAttachment = Union['Image', 'ImageFace']
+
+# Object Group Aliases
+Releasable = Union['Buffer', 'Image', 'Pipeline', 'Compute', 'Fence']
+Inspectable = Union['Buffer', 'Image', 'Pipeline', 'Compute']
+
 class VertexBufferBinding(TypedDict, total=False):
     """Configuration for a vertex buffer attribute."""
-    buffer: Buffer
+    buffer: 'Buffer'
     format: VertexFormat
     location: int
     offset: int
@@ -231,6 +246,16 @@ class ContextLoader(Protocol):
     """Callback protocol for loading OpenGL function pointers."""
     def load_opengl_function(self, name: str) -> int: ...
 
+# --- Exceptions ---
+
+class Error(Exception):
+    """
+    Base exception class for all HyperGL-specific errors.
+    Used for VM failures (stack overflow, invalid opcodes), context losses, 
+    and resource allocation errors.
+    """
+    pass
+
 # --- Internal State Objects ---
 
 class DescriptorSet:
@@ -255,7 +280,7 @@ class ImageFace:
     Represents a specific layer or mip-level of an Image (Texture).
     This object is used to attach specific faces to Framebuffers.
     """
-    image: Image
+    image: 'Image'
     size: Tuple[int, int]
     samples: int
     color: bool
@@ -266,7 +291,7 @@ class ImageFace:
 
     def blit(
         self,
-        target: ImageFace,
+        target: 'ImageFace',
         offset: Tuple[int, int] | None = None,
         size: Tuple[int, int] | None = None,
         crop: Viewport | None = None,
@@ -319,7 +344,7 @@ class SceneCompiler:
     High-level compiler for the Command Buffer VM.
     Translates Python context managers into GOTO, LABEL, and JUMP bytecode.
     """
-    def __init__(self, cb: CommandBuffer) -> None: ...
+    def __init__(self, cb: 'CommandBuffer') -> None: ...
 
     def loop(self, reg: int, count: Optional[int] = None) -> Iterator[None]:
         """
@@ -332,7 +357,7 @@ class SceneCompiler:
         """
         ...
 
-    def condition(self, buffer: Buffer, offset: int, invert: bool = False) -> Iterator[None]:
+    def condition(self, buffer: 'Buffer', offset: int, invert: bool = False) -> Iterator[None]:
         """
         Bytecode Construct: IF (Memory-based)
         Skips the block if a uint32 value in GPU memory is 0 (or not 0).
@@ -371,6 +396,28 @@ class SceneCompiler:
                 # Use i0, i1, i2 freely here
                 cmd.set_iter(0, 100)
             # i0, i1, i2 are now back to their original values
+        """
+        ...
+
+    def while_not_zero(self, buffer: 'Buffer', offset: int) -> Iterator[None]:
+        """
+        Bytecode Construct: WHILE (Memory-based)
+        Repeats the block as long as the uint32 value in GPU memory is not 0.
+        """
+        ...
+
+    def while_reg_not_zero(self, reg: int) -> Iterator[None]:
+        """
+        Bytecode Construct: WHILE (Register-based)
+        Repeats the block as long as the internal VM register i[reg] is not 0.
+        """
+        ...
+
+    def switch(self, reg: int, cases: int) -> Iterator[List[str]]:
+        """
+        Bytecode Construct: SWITCH/CASE
+        Emits an O(1) jump table based on i[reg]. 
+        Yields a list of labels the user must define for each case.
         """
         ...
 
@@ -440,7 +487,7 @@ class CommandBuffer:
         """
         ...
 
-    def submit(self) -> None:
+    def submit(self, budget: int = 1_000_000, trace: bool = False) -> int:
         """
         Executes the recorded bytecode sequence in a tight C loop.
         
@@ -448,12 +495,25 @@ class CommandBuffer:
         Python threads to run in parallel. It checks for Python signals (Ctrl+C) 
         every 1024 instructions to ensure infinite loops can be interrupted.
 
+        Args:
+            budget: Maximum number of VM instructions allowed per execution. 
+                    Prevents runaway 'while' loops from hanging the thread.
+                    Default is 1,000,000.
+            trace: If True, prints execution state to stderr (slow, use for debug).
+
+        Returns:
+            The total number of instructions executed (including subroutines).
+
+        Raises:
+            Error: If a VM error occurs 
+                   (e.g., stack overflow, recursion limit, budget exceeded).
+
         Note:
             Must be called on the thread that owns the OpenGL context.
         """
         ...
 
-    def bind_pipeline(self, pipeline: Pipeline) -> None:
+    def bind_pipeline(self, pipeline: 'Pipeline') -> None:
         """
         Bytecode Instruction: BIND_PIPELINE
         
@@ -462,7 +522,7 @@ class CommandBuffer:
         """
         ...
 
-    def bind_compute(self, compute: Compute) -> None:
+    def bind_compute(self, compute: 'Compute') -> None:
         """
         Bytecode Instruction: BIND_COMPUTE
         
@@ -497,7 +557,7 @@ class CommandBuffer:
         """
         ...
 
-    def draw_indirect(self, buffer: Buffer, count: int = 1, offset: int = 0, stride: int = 0) -> None:
+    def draw_indirect(self, buffer: 'Buffer', count: int = 1, offset: int = 0, stride: int = 0) -> None:
         """
         Bytecode Instruction: DRAW_INDIRECT
         
@@ -523,7 +583,7 @@ class CommandBuffer:
         """
         ...
 
-    def skip_if_zero(self, buffer: Buffer, offset: int) -> None:
+    def skip_if_zero(self, buffer: 'Buffer', offset: int) -> None:
         """
         Bytecode Instruction: SKIP_IF_ZERO
         
@@ -534,7 +594,7 @@ class CommandBuffer:
         """
         ...
 
-    def skip_if_not_zero(self, buffer: Buffer, offset: int) -> None:
+    def skip_if_not_zero(self, buffer: 'Buffer', offset: int) -> None:
         """
         Bytecode Instruction: SKIP_IF_NOT_ZERO
         
@@ -565,7 +625,7 @@ class CommandBuffer:
         """
         return 0
 
-    def print(self, message: str, buffer: Optional[Buffer] = None, offset: int = 0) -> None:
+    def print(self, message: str, buffer: Optional['Buffer'] = None, offset: int = 0) -> None:
         """
         Bytecode Instruction: PRINT
         
@@ -574,7 +634,7 @@ class CommandBuffer:
         """
         ...
 
-    def dump(self, buffer: Buffer, offset: int = 0, count: int = 1, type: Literal['float', 'int', 'uint'] = 'float', message: str = "DUMP") -> None:
+    def dump(self, buffer: 'Buffer', offset: int = 0, count: int = 1, type: Literal['float', 'int', 'uint'] = 'float', message: str = "DUMP") -> None:
         """
         Bytecode Instruction: DUMP
         
@@ -583,7 +643,7 @@ class CommandBuffer:
         """
         ...
 
-    def call(self, other: CommandBuffer) -> None:
+    def call(self, other: 'CommandBuffer') -> None:
         """
         Bytecode Instruction: CALL
         
@@ -631,18 +691,18 @@ class CommandBuffer:
         """
         ...
 
-    def store_reg(self, reg: int, buffer: Buffer, offset: int) -> None:
+    def store_reg(self, reg: int, buffer: 'Buffer', offset: int) -> None:
         """
         Bytecode Instruction: STORE_REG
         Writes the current value of VM register i[reg] into the MAPPED buffer 
         at the specified byte offset.
         """
         ...
-    def load_reg(self, reg: int, buffer: Buffer, offset: int) -> None:
+    def load_reg(self, reg: int, buffer: 'Buffer', offset: int) -> None:
         """Reads a uint32 from a mapped buffer into register i[reg]."""
         ...
 
-    def alu(self, reg_a: int, reg_b: int, op: Literal['add', 'sub', 'mul', 'div', 'and', 'or']) -> None:
+    def alu(self, reg_a: int, reg_b: int, op: Literal['add', 'sub', 'mul', 'div', 'and', 'or', "xor", "lsh", "rsh", "not"]) -> None:
         """Performs i[reg_a] = i[reg_a] OP i[reg_b]."""
         ...
 
@@ -650,11 +710,11 @@ class CommandBuffer:
         """Bytecode Instruction: RET. Exits current buffer/subroutine."""
         ...
 
-    def ret_if_zero(self, buffer: Buffer, offset: int) -> None:
+    def ret_if_zero(self, buffer: 'Buffer', offset: int) -> None:
         """Bytecode Instruction: RET_IF_ZERO. Exits current buffer if memory is 0."""
         ...
 
-    def ret_if_not_zero(self, buffer: Buffer, offset: int) -> None:
+    def ret_if_not_zero(self, buffer: 'Buffer', offset: int) -> None:
         """Bytecode Instruction: RET_IF_NOT_ZERO. Exits current buffer if memory is not 0."""
         ...
 
@@ -678,7 +738,7 @@ class CommandBuffer:
         """
         ...
 
-    def load_reg_indirect(self, reg: int, buffer: Buffer, index_reg: int, base_offset: int = 0, stride: int = 4) -> None:
+    def load_reg_indirect(self, reg: int, buffer: 'Buffer', index_reg: int, base_offset: int = 0, stride: int = 4) -> None:
         """
         Bytecode Instruction: LOAD_REG_INDIRECT
         
@@ -689,7 +749,7 @@ class CommandBuffer:
         """
         ...
 
-    def store_reg_indirect(self, reg: int, buffer: Buffer, index_reg: int, base_offset: int = 0, stride: int = 4) -> None:
+    def store_reg_indirect(self, reg: int, buffer: 'Buffer', index_reg: int, base_offset: int = 0, stride: int = 4) -> None:
         """
         Bytecode Instruction: STORE_REG_INDIRECT
         
@@ -742,15 +802,48 @@ class CommandBuffer:
         """
         ...
 
+    def draw_indirect_count(self, buffer: 'Buffer', count_buffer: 'Buffer', offset: int = 0, count_offset: int = 0, max_count: int = 1, stride: int = 0) -> None:
+        """
+        Bytecode Instruction: DRAW_INDIRECT_COUNT
+        Draws up to 'max_count' objects, reading the actual count from 'count_buffer'.
+        Enables 100% GPU-driven rendering.
+        """
+        ...
+
+    def set_uniform(self, location: int, reg: int, type: UniformType = 'float') -> None:
+        """
+        Bytecode Instruction: SET_UNIFORM
+        Injects the current 32-bit value of internal VM register i[reg] directly 
+        into a shader uniform location.
+        """
+        ...
+
+    def jump_table(self, reg: int, targets: List[Union[str, int]]) -> None:
+        """
+        Bytecode Instruction: JUMP_TABLE
+        Performs an O(1) jump based on the value in i[reg].
+        If i[reg] == 0, jump to targets[0], etc.
+        """
+        ...
+
+    def assert_reg(self, reg: int, value: int, op: Literal['==', '!=', '<', '>', '<=', '>='] = '==') -> None:
+        """
+        Bytecode Instruction: ASSERT_REG
+        Halts VM execution and raises hypergl.Error if the condition i[reg] OP value is false.
+        """
+        ...
+
 class Buffer:
     """
     Represents an OpenGL Buffer Object (VBO, IBO, UBO, SSBO).
     """
     size: int
 
-    def read(self, size: int | None = None, offset: int = 0, into=None) -> bytes:
+    def read(self, size: int | None = None, offset: int = 0, into: Any | None = None) -> bytes | None:
         """
         Download data from the GPU buffer.
+        Note: This method is implicitly synchronous and will wait for the GPU to finish 
+        all pending work before reading.
         
         Args:
             size: Number of bytes to read. Defaults to remainder of buffer.
@@ -799,7 +892,7 @@ class Buffer:
         Only valid for buffers created with storage=True.
         """
         ...
-    def write_texture_handle(self, offset: int, image: Image) -> None:
+    def write_texture_handle(self, offset: int, image: 'Image') -> None:
         """
         Write a 64-bit bindless texture handle into the buffer at the specific offset.
         Automatically retrieves or creates the handle from the Image object.
@@ -857,9 +950,11 @@ class Image:
         """Generate mipmaps for the image (glGenerateMipmap)."""
         ...
 
-    def read(self, size: Tuple[int, int] | None = None, offset: Tuple[int, int] | None = None, into=None) -> bytes:
+    def read(self, size: Tuple[int, int] | None = None, offset: Tuple[int, int] | None = None, into: Any | None = None) -> bytes | None:
         """
         Read pixel data from the image.
+        Note: This method is implicitly synchronous and will wait for the GPU to finish 
+        all pending work before reading. Handles MSAA resolve automatically.
         
         Args:
             size: (width, height) to read.
@@ -886,7 +981,7 @@ class Image:
 
     def blit(
         self,
-        target: Image | None = None,
+        target: Optional['Image'] = None,
         offset: Tuple[int, int] | None = None,
         size: Tuple[int, int] | None = None,
         crop: Viewport | None = None,
@@ -908,6 +1003,7 @@ class Pipeline:
     first_vertex: int
     viewport: Viewport
     uniforms: Dict[str, memoryview] | None
+    descriptor_set: DescriptorSet
     """
     A dictionary proxy to the uniform memory. 
     Modify the memoryviews in this dict to update shader uniforms.
@@ -1011,15 +1107,15 @@ class Context:
 
     def pipeline(
         self,
-        vertex_shader: str = ...,
-        fragment_shader: str = ...,
+        vertex_shader: str | None = None,
+        fragment_shader: str | None = None,
         layout: Iterable[LayoutBinding] = (),
-        resources: Iterable[BufferResource | SamplerResource] = (),
-        uniforms: Dict[str, Any] | None = None,
+        resources: Iterable[PipelineResource] = (),
+        uniforms: UniformMap | None = None,
         depth: DepthSettings | None = None,
         stencil: StencilSettings | None = None,
         blend: BlendSettings | None = None,
-        framebuffer: Iterable[Image | ImageFace] | None = ...,
+        framebuffer: Iterable[FramebufferAttachment] | None = None,
         vertex_buffers: Iterable[VertexBufferBinding] = (),
         index_buffer: Buffer | None = None,
         short_index: bool = False,
@@ -1033,7 +1129,7 @@ class Context:
         viewport_data: memoryview | None = None,
         render_data: memoryview | None = None,
         includes: Dict[str, str] | None = None,
-        template: Pipeline = ...,
+        template: Pipeline | None = None,
     ) -> Pipeline:
         """
         Create a graphics Pipeline state object.
@@ -1065,8 +1161,8 @@ class Context:
     def compute(
         self,
         compute_shader: str | bytes,
-        resources: Iterable[BufferResource | SamplerResource | StorageBufferResource] = (),
-        uniforms: Dict[str, Any] | None = None,
+        resources: Iterable[ComputeResource] = (),
+        uniforms: UniformMap | None = None,
         uniform_data: memoryview | None = None,
     ) -> Compute:
         """
@@ -1106,7 +1202,7 @@ class Context:
         """
         ...
 
-    def release(self, obj: Buffer | Image | Pipeline | Compute | Fence | Literal['shader_cache'] | Literal['all']) -> None:
+    def release(self, obj: Releasable | Literal['shader_cache', 'all']) -> None:
         """
         Add an OpenGL object to the Shared Trash bin for safe deletion.
         
@@ -1136,7 +1232,7 @@ class Context:
         """
         ...
 
-    def gc(self) -> List[Buffer | Image | Pipeline | Compute]:
+    def gc(self) -> List[Union[Buffer, Image, Pipeline, Compute]]:
         """Trigger garbage collection of released GL objects."""
         ...
 
@@ -1153,6 +1249,32 @@ class Context:
             
         Returns:
             A bytes object containing the tightly packed C-structs.
+        """
+        ...
+
+    @property
+    def stats(self) -> Dict[str, int]:
+        """
+        Returns a dictionary of real-time performance counters.
+        Includes: draw_calls, pipeline_swaps, set_swaps, and dispatch_calls.
+        """
+        ...
+
+    def reset_stats(self) -> None:
+        """Resets all performance counters in ctx.stats to zero."""
+        ...
+
+    def finish(self) -> None:
+        """
+        Hard synchronization. Blocks the CPU until every single GPU command 
+        currently in the queue is finished. Useful for benchmarks and tests.
+        """
+        ...
+
+    def invalidate_state(self) -> None:
+        """
+        Forces the engine to forget all cached hardware state.
+        Call this if you are using external raw OpenGL calls alongside HyperGL.
         """
         ...
 
@@ -1177,7 +1299,7 @@ def context() -> Context:
     """Retrieve the singleton HyperGL Context."""
     ...
 
-def inspect(self, obj: Buffer | Image | Pipeline | Compute):
+def inspect(obj: Inspectable) -> Dict[str, Any]:
     """
     Return a dictionary containing internal GL state/IDs of the object.
     Useful for debugging.
