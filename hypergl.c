@@ -8465,6 +8465,126 @@ static PyObject *CommandBuffer_meth_assert_reg(CommandBuffer *self, PyObject *ar
     Py_RETURN_NONE;
 }
 
+static const char* hgl_get_alu_op(uint32_t op) {
+    const char* ops[] = {"add", "sub", "mul", "div", "and", "or", "xor", "lsh", "rsh", "not"};
+    return (op < 10) ? ops[op] : "???";
+}
+
+static const char* hgl_get_assert_op(uint32_t op) {
+    const char* ops[] = {"==", "!=", "<", ">", "<=", ">="};
+    return (op < 6) ? ops[op] : "???";
+}
+
+// Helper: Finds a label name associated with a bytecode offset
+static const char* hgl_find_label(CommandBuffer *self, uint32_t offset) {
+    Py_ssize_t pos = 0;
+    PyObject *key, *val;
+    while (PyDict_Next(self->labels, &pos, &key, &val)) {
+        if ((uint32_t)PyLong_AsSize_t(val) == offset) {
+            return PyUnicode_AsUTF8(key);
+        }
+    }
+    return NULL;
+}
+
+static PyObject *CommandBuffer_meth_disassemble(CommandBuffer *self, PyObject *Py_UNUSED(ignored)) {
+    PyObject *res = PyList_New(0);
+    
+    // 1. Table Header
+    PyList_Append(res, PyUnicode_FromString("OFFSET  OPCODE              OPERANDS                HUMAN NOTES"));
+    PyList_Append(res, PyUnicode_FromString("-----------------------------------------------------------------------"));
+
+    uint8_t *ptr = self->data;
+    uint8_t *end = ptr + self->size;
+
+    while (ptr < end) {
+        uint32_t offset = (uint32_t)(ptr - self->data);
+        CmdHeader *header = (CmdHeader *)ptr;
+
+        // 2. Check for Labels pointing to this location
+        const char* label_at = hgl_find_label(self, offset);
+        if (label_at) {
+            char lbl_line[256];
+            snprintf(lbl_line, sizeof(lbl_line), "        LABEL               \"%s\"", label_at);
+            PyList_Append(res, PyUnicode_FromString(lbl_line));
+        }
+
+        char operands[64] = "";
+        char notes[128] = "";
+
+        // 3. Smart Opcode Analysis
+        switch (header->type) {
+            case CMD_PUSH: {
+                uint32_t r = ((CmdStackOp*)ptr)->reg;
+                snprintf(operands, 64, "i%u", r);
+                snprintf(notes, 128, "Backup caller register i%u", r);
+                break;
+            }
+            case CMD_POP: {
+                uint32_t r = ((CmdStackOp*)ptr)->reg;
+                snprintf(operands, 64, "i%u", r);
+                snprintf(notes, 128, "Restore caller register i%u", r);
+                break;
+            }
+            case CMD_LOAD_REG: {
+                CmdLoadReg *c = (CmdLoadReg *)ptr;
+                snprintf(operands, 64, "i%u, buf:%d, off:%u", c->reg, c->buffer->buffer, c->offset);
+                snprintf(notes, 128, "Load value from GPU memory");
+                break;
+            }
+            case CMD_STORE_REG: {
+                CmdStoreReg *c = (CmdStoreReg *)ptr;
+                snprintf(operands, 64, "i%u, buf:%d, off:%u", c->reg, c->buffer->buffer, c->offset);
+                snprintf(notes, 128, "Commit register to GPU memory");
+                break;
+            }
+            case CMD_JUMP_ITER: {
+                CmdJumpIter *c = (CmdJumpIter *)ptr;
+                const char* target_name = hgl_find_label(self, c->target_offset);
+                if (target_name) snprintf(operands, 64, "i%u, \"%s\"", c->reg, target_name);
+                else snprintf(operands, 64, "i%u, 0x%X", c->reg, c->target_offset);
+                snprintf(notes, 128, "Decrement and loop");
+                break;
+            }
+            case CMD_GOTO: {
+                CmdGoto *c = (CmdGoto *)ptr;
+                const char* target_name = hgl_find_label(self, c->target_offset);
+                if (target_name) snprintf(operands, 64, "\"%s\"", target_name);
+                else snprintf(operands, 64, "0x%X", c->target_offset);
+                break;
+            }
+            case CMD_CALL: {
+                CmdCall *c = (CmdCall *)ptr;
+                snprintf(operands, 64, "Buffer(%p)", (void*)c->other);
+                snprintf(notes, 128, "Execute subroutine");
+                break;
+            }
+            case CMD_BIND_SET_DRAW: {
+                CmdBindSetDraw *c = (CmdBindSetDraw *)ptr;
+                snprintf(operands, 64, "Set(%p), vc:%d", (void*)c->set, c->vertex_count);
+                snprintf(notes, 128, "OPTIMIZED: Material + Draw");
+                break;
+            }
+            case CMD_ALU: {
+                CmdAlu *c = (CmdAlu *)ptr;
+                snprintf(operands, 64, "i%u, i%u, %s", c->reg_a, c->reg_b, hgl_get_alu_op(c->op));
+                snprintf(notes, 128, "i%u = i%u %s i%u", c->reg_a, c->reg_a, hgl_get_alu_op(c->op), c->reg_b);
+                break;
+            }
+            case CMD_RET: snprintf(notes, 128, "Return to parent caller"); break;
+            default: snprintf(notes, 128, "Size: %u bytes", header->size); break;
+        }
+
+        // 4. Format the final table row
+        char line[512];
+        snprintf(line, sizeof(line), "0x%04X: %-18s  %-22s  ; %s", offset, hgl_get_op_name(header->type), operands, notes);
+        PyList_Append(res, PyUnicode_FromString(line));
+
+        ptr += header->size;
+    }
+    return res;
+}
+
 /**
  * Internal Recursive Executor for Command Buffers.
  *
@@ -9462,7 +9582,7 @@ static PyMethodDef CommandBuffer_methods[] = {
     // --- Relocation ---
     {"serialize",           (PyCFunction)CommandBuffer_meth_serialize,           METH_NOARGS,  NULL},
     {"patch",               (PyCFunction)CommandBuffer_meth_patch,               METH_VARARGS, NULL},
-
+    {"disassemble",         (PyCFunction)CommandBuffer_meth_disassemble,         METH_NOARGS, "Returns a list of strings representing the recorded bytecode."},
     {NULL}
 };
 
