@@ -4467,26 +4467,29 @@ static PyObject *Image_meth_make_resident(Image *self, PyObject *args) {
     return NULL;
   }
 
-  int resident = 1; // Default True
+  int resident = 1; 
   if (!PyArg_ParseTuple(args, "|p", &resident)) {
     return NULL;
   }
 
   if (self->bindless_handle == 0) {
-    PyErr_SetString(
-        PyExc_RuntimeError,
-        "[HyperGL] Texture has no handle. Call get_handle() first.");
+    PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Call get_handle() first.");
     return NULL;
   }
 
   PyMutex_Lock(&self->ctx->state_lock);
+
+  // 1. Clear existing errors so we don't catch a "false positive"
+  while (glGetError() != GL_NO_ERROR); 
+
   if (resident && !self->is_resident) {
     glMakeTextureHandleResidentARB(self->bindless_handle);
-    if (glGetError() == GL_NO_ERROR) {
+    GLenum err = glGetError();
+    if (err == GL_NO_ERROR) {
       self->is_resident = 1;
     } else {
-      PyErr_SetString(PyExc_RuntimeError,
-                      "[HyperGL] Failed to make texture handle resident");
+      PyMutex_Unlock(&self->ctx->state_lock); // CRITICAL: Unlock before erroring
+      PyErr_Format(PyExc_RuntimeError, "[HyperGL] glMakeTextureHandleResidentARB failed: 0x%04X", err);
       return NULL;
     }
   } else if (!resident && self->is_resident) {
@@ -4494,13 +4497,13 @@ static PyObject *Image_meth_make_resident(Image *self, PyObject *args) {
     if (glGetError() == GL_NO_ERROR) {
       self->is_resident = 0;
     } else {
-      PyErr_SetString(PyExc_RuntimeError,
-                      "[HyperGL] Failed to make texture handle non-resident");
+      PyMutex_Unlock(&self->ctx->state_lock); // CRITICAL: Unlock before erroring
+      PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Failed to make handle non-resident");
       return NULL;
     }
   }
-  PyMutex_Unlock(&self->ctx->state_lock);
 
+  PyMutex_Unlock(&self->ctx->state_lock);
   Py_RETURN_NONE;
 }
 
