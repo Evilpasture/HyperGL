@@ -169,11 +169,15 @@ class HGLCompiler:
         token_spec = [
             ('COMMENT', r'(#|//).*'),
             ('HEX',     r'0x[0-9a-fA-F]+'),
-            ('FLOAT',   r'-?\d+\.\d+'),
+            # Improved FLOAT: handles .5, 10., and scientific notation
+            ('FLOAT',   r'-?(?:\d+\.\d*|\.\d+)(?:[eE][-+]?\d+)?|\d+[eE][-+]?\d+'),
             ('INT',     r'-?\d+'),
-            ('REG',     r'i[0-7]'),
+            # Generalized REG: matches i0, i99. Range check happens in Parser.
+            ('REG',     r'i\d+'),
             ('REF',     r'@[a-zA-Z0-9_]+'),
-            ('STRING',  r'"[^"]*"'),
+            # Safe STRING: Prevents matching across newlines
+            ('STRING',  r'"[^"\n]*"'),
+            # Removed unused MATH_ASSIGN
             ('ID',      r'[a-zA-Z_][a-zA-Z0-9_]*'),
             ('OP',      r'(==|!=|<=|>=|<|>)'),
             ('ASSIGN',  r'='),
@@ -184,6 +188,7 @@ class HGLCompiler:
             ('SKIP',    r'[ \t]+'),
             ('MISMATCH',r'.'),
         ]
+        
         tok_regex = '|'.join('(?P<%s>%s)' % pair for pair in token_spec)
         
         tokens = []
@@ -340,7 +345,7 @@ class HGLCompiler:
             
         elif op == 'call':
             other = self._resolve()
-            if not isinstance(other, hypergl.CommandBuffer): 
+            if not isinstance(other, CommandBuffer): 
                 self._fail(f"call target must be CommandBuffer, got {type(other)}", tk)
             self.cmd.call(other)
             
