@@ -1736,7 +1736,7 @@ static GlobalSettings *build_global_settings(const Context *self,
   if (!res) {
     return NULL;
   }
-  zeromem(res, sizeof(*res));
+  memset((char *)res + sizeof(PyObject), 0, sizeof(GlobalSettings) - sizeof(PyObject));
 
   int it = 0;
   int length = (int)PyTuple_Size(settings);
