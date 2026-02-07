@@ -3518,7 +3518,8 @@ static PyObject *Context_meth_migrate(Context *self, PyObject *Py_UNUSED(ignored
 static Buffer *Context_meth_buffer(Context *self, PyObject *args,
                                    PyObject *kwargs) {
   static char *keywords[] = {"data",    "size",    "access",   "index",
-                             "uniform", "storage", "external", NULL};
+                             "uniform", "storage", "external", "name", 
+                             NULL};
 
   PyObject *data = Py_None;               // borrowed
   PyObject *contiguous_data = NULL;      // owned
@@ -3528,10 +3529,11 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args,
   int uniform = 0;
   int storage = 0;
   int external = 0;
+  const char *name = "unnamed_buffer";
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|O$OOpppi", keywords, &data,
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|O$OOpppiz", keywords, &data,
                                    &size_arg, &access_arg, &index, &uniform,
-                                   &storage, &external)) {
+                                   &storage, &external, &name)) {
     return NULL;
   }
 
@@ -3679,6 +3681,7 @@ static Buffer *Context_meth_buffer(Context *self, PyObject *args,
 
   res->ctx = self;
   Py_INCREF(self);
+  snprintf(res->name, sizeof(res->name), "%s", name);
   res->buffer = buffer;
   res->target = target;
   res->size = size;
