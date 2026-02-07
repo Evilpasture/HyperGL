@@ -7137,7 +7137,7 @@ static void Fence_dealloc(Fence *self) {
 
     if (self->sync && self->ctx && !self->ctx->is_lost && self->ctx->trash_shared) {
         // Cast pointer to uint64_t for storage
-        enqueue_trash(self->ctx->trash_shared, (int)(uint64_t)(uintptr_t)self->sync, TRASH_FENCE);
+        enqueue_trash(self->ctx->trash_shared, (uint64_t)(uintptr_t)self->sync, TRASH_FENCE);
     }
 
     Py_XDECREF(self->ctx);
