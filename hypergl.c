@@ -2812,10 +2812,12 @@ static PyObject *meth_cleanup(PyObject *self, PyObject *args) {
   Context *ctx = (Context *)module_state->default_context;
 
   if (ctx != (Context *)Py_None && !ctx->is_lost) {
-    Py_XDECREF(
-        PyObject_CallMethod((PyObject *)ctx, "release", "s", "shader_cache"));
+    // 1. Mark as lost FIRST
+    ctx->is_lost = 1; 
+
+    // 2. Clear caches (triggers deallocs)
+    Py_XDECREF(PyObject_CallMethod((PyObject *)ctx, "release", "s", "shader_cache"));
     Py_XDECREF(PyObject_CallMethod((PyObject *)ctx, "release", "s", "all"));
-    ctx->is_lost = 1;
   }
 
   Py_CLEAR(module_state->default_context);
