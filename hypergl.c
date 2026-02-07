@@ -442,6 +442,34 @@ static FORCE_INLINE void safe_release_buffer(Py_buffer *view) {
     }
 }
 
+static FORCE_INLINE void hgl_strcpy(char *dest, const char *src, size_t dest_size) {
+    if (dest_size == 0) return;
+    size_t len = strlen(src);
+    size_t limit = dest_size - 1;
+    size_t to_copy = (len < limit) ? len : limit;
+
+    memcpy(dest, src, to_copy);
+    dest[to_copy] = '\0';
+}
+
+#ifdef _WIN32
+static double hgl_get_absolute_time() {
+    static LARGE_INTEGER freq;
+    static int initialized = 0;
+    if (!initialized) { QueryPerformanceFrequency(&freq); initialized = 1; }
+    LARGE_INTEGER count;
+    QueryPerformanceCounter(&count);
+    return (double)count.QuadPart / (double)freq.QuadPart;
+}
+#else
+#include <time.h>
+static double hgl_get_absolute_time() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+#endif
+
 // -----------------------------------------------------------------------------
 // Uniform Binding Helpers & Dispatch Table
 // -----------------------------------------------------------------------------
@@ -7510,56 +7538,72 @@ static int hgl_is_jump_target(CommandBuffer *self, size_t offset) {
 }
 
 static void CommandBuffer_optimize(CommandBuffer *self) {
-    if (self->size == 0) return;
+  if (self->size == 0)
+    return;
 
-    uint8_t *ptr = self->data;
-    uint8_t *end = ptr + self->size;
+  uint8_t *ptr = self->data;
+  uint8_t *end = ptr + self->size;
 
-    while (ptr < end) {
-        CmdHeader *header = (CmdHeader *)ptr;
-        uint8_t *next_ptr = ptr + header->size;
+  while (ptr < end) {
+    CmdHeader *header = (CmdHeader *)ptr;
+    uint8_t *next_ptr = ptr + header->size;
 
-        if (header->type == CMD_BIND_DESCRIPTOR_SET && next_ptr < end) {
-            CmdHeader *next_header = (CmdHeader *)next_ptr;
+    if (header->type == CMD_BIND_DESCRIPTOR_SET && next_ptr < end) {
+      CmdHeader *next_header = (CmdHeader *)next_ptr;
 
-            if (next_header->type == CMD_DRAW) {
-                // Determine if 'next_ptr' is a target of a jump/label
-                int is_jump_target = 0;
-                Py_ssize_t pos = 0;
-                PyObject *key, *val;
-                size_t draw_offset = next_ptr - self->data;
+      if (next_header->type == CMD_DRAW) {
+        // Determine if 'next_ptr' is a target of a jump/label
+        int is_jump_target = 0;
+        Py_ssize_t pos = 0;
+        PyObject *key, *val;
+        size_t draw_offset = next_ptr - self->data;
 
-                // Check label dictionary
-                while (PyDict_Next(self->labels, &pos, &key, &val)) {
-                    if ((size_t)PyLong_AsSize_t(val) == draw_offset) {
-                        is_jump_target = 1;
-                        break;
-                    }
-                }
-
-                if (!is_jump_target) {
-                    // Save necessary data before overwriting
-                    DescriptorSet *saved_set = ((CmdBindDescriptorSet *)ptr)->set;
-                    CmdDraw *old_draw = (CmdDraw *)next_ptr;
-
-                    // Combine headers
-                    uint32_t combined_size = header->size + next_header->size;
-                    header->type = CMD_BIND_SET_DRAW;
-                    header->size = combined_size;
-
-                    // Re-cast and fill the new super-struct
-                    CmdBindSetDraw *super = (CmdBindSetDraw *)ptr;
-                    super->set = saved_set;
-                    super->vertex_count = old_draw->vertex_count;
-                    super->instance_count = old_draw->instance_count;
-                    super->first = old_draw->first;
-                }
-            }
+        // Check label dictionary
+        while (PyDict_Next(self->labels, &pos, &key, &val)) {
+          if ((size_t)PyLong_AsSize_t(val) == draw_offset) {
+            is_jump_target = 1;
+            break;
+          }
         }
-        ptr += header->size;
-    }
-}
 
+        if (!is_jump_target) {
+          // Save necessary data before overwriting
+          DescriptorSet *saved_set = ((CmdBindDescriptorSet *)ptr)->set;
+          CmdDraw *old_draw = (CmdDraw *)next_ptr;
+
+          // Combine headers
+          uint32_t combined_size = header->size + next_header->size;
+          header->type = CMD_BIND_SET_DRAW;
+          header->size = combined_size;
+
+          // Re-cast and fill the new super-struct
+          CmdBindSetDraw *super = (CmdBindSetDraw *)ptr;
+          super->set = saved_set;
+          super->vertex_count = old_draw->vertex_count;
+          super->instance_count = old_draw->instance_count;
+          super->first = old_draw->first;
+        }
+      } else if (next_header->type == CMD_DRAW_INDIRECT) {
+        if (!hgl_is_jump_target(self, next_ptr - self->data)) {
+          DescriptorSet *saved_set = ((CmdBindDescriptorSet *)ptr)->set;
+          CmdDrawIndirect *old_draw = (CmdDrawIndirect *)next_ptr;
+
+          uint32_t combined_size = header->size + next_header->size;
+          header->type = CMD_BIND_SET_DRAW_INDIRECT;
+          header->size = combined_size;
+
+          CmdBindSetDrawIndirect *super = (CmdBindSetDrawIndirect *)ptr;
+          super->set = saved_set;
+          super->buffer = old_draw->buffer;
+          super->count = old_draw->count;
+          super->offset = old_draw->offset;
+          super->stride = old_draw->stride;
+        }
+      }
+    }
+    ptr += header->size;
+  }
+}
 
 static int CommandBuffer_resolve_labels(CommandBuffer *self) {
     Py_ssize_t fixup_count = PyList_Size(self->fixups);
@@ -7627,8 +7671,7 @@ static PyObject *CommandBuffer_meth_print(CommandBuffer *self, PyObject *args, P
     cmd->header.size = sizeof(CmdPrint);
     
     // Copy message safely
-    strncpy(cmd->message, msg, sizeof(cmd->message) - 1);
-    cmd->message[sizeof(cmd->message) - 1] = '\0';
+    hgl_strcpy(cmd->message, msg, sizeof(cmd->message));
 
     if (buf_obj != Py_None) {
         if (!PyObject_TypeCheck(buf_obj, self->ctx->module_state->Buffer_type)) {
@@ -7689,8 +7732,7 @@ static PyObject *CommandBuffer_meth_dump(CommandBuffer *self, PyObject *args, Py
     else if (strcmp(type_str, "uint") == 0) cmd->stride = 2;
     else cmd->stride = 0; // Default float
 
-    strncpy(cmd->message, msg, sizeof(cmd->message) - 1);
-    cmd->message[sizeof(cmd->message) - 1] = '\0';
+    hgl_strcpy(cmd->message, msg, sizeof(cmd->message));
 
     CommandBuffer_push_ref(self, buf_obj);
     self->size += cmd->header.size;
@@ -8018,7 +8060,7 @@ static PyObject *record_mem_indirect(CommandBuffer *self, PyObject *args, PyObje
     int reg, idx_reg, base = 0, stride = 4;
     PyObject *buf_obj;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "iO!iii", kw, 
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "iO!i|ii", kw, 
         &reg, self->ctx->module_state->Buffer_type, &buf_obj, &idx_reg, &base, &stride)) return NULL;
 
     if (reg < 0 || reg > 7 || idx_reg < 0 || idx_reg > 7) 
@@ -8112,6 +8154,20 @@ static PyObject *CommandBuffer_meth_serialize(CommandBuffer *self, PyObject *Py_
                 PATCH_PTR(((CmdBindSetDraw*)ptr)->set);
                 break;
 
+            case CMD_BIND_SET_DRAW_INDIRECT:
+                PATCH_PTR(((CmdBindSetDrawIndirect*)ptr)->set);
+                PATCH_PTR(((CmdBindSetDrawIndirect*)ptr)->buffer);
+                break;
+
+            case CMD_SET_BUFFER_OFFSET:
+                PATCH_PTR(((CmdSetBufferOffset*)ptr)->buffer);
+                break;
+
+            case CMD_COPY_BUFFER:
+                PATCH_PTR(((CmdCopyBuffer*)ptr)->src);
+                PATCH_PTR(((CmdCopyBuffer*)ptr)->dst);
+                break;
+
             case CMD_SKIP_IF_ZERO:
             case CMD_SKIP_IF_NOT_ZERO:   PATCH_PTR(((CmdSkip*)ptr)->buffer); break;
             case CMD_LOAD_REG:           PATCH_PTR(((CmdLoadReg*)ptr)->buffer); break;
@@ -8146,9 +8202,14 @@ static PyObject *CommandBuffer_meth_serialize(CommandBuffer *self, PyObject *Py_
             case CMD_SET_UNIFORM:
             case CMD_ASSERT_REG:
             case CMD_GEN_RAND:
+            case CMD_GET_TIME:
+            case CMD_GET_DELTA:
+            case CMD_CMP:
+            case CMD_SIN_COS:
+            case CMD_GET_STAT:
                 break;
 
-            default: break;
+            default: continue;
         }
         #undef PATCH_PTR
         ptr += header->size;
@@ -8253,6 +8314,19 @@ static PyObject *CommandBuffer_meth_patch(CommandBuffer *self, PyObject *args) {
                 INFLATE_PTR(((CmdBindSetDraw*)ptr)->set, DescriptorSet_type);
                 break;
 
+            case CMD_BIND_SET_DRAW_INDIRECT:
+                INFLATE_PTR(((CmdBindSetDrawIndirect*)ptr)->set, DescriptorSet_type);
+                INFLATE_PTR(((CmdBindSetDrawIndirect*)ptr)->buffer, Buffer_type);
+                break;
+
+            case CMD_SET_BUFFER_OFFSET:
+                INFLATE_PTR(((CmdSetBufferOffset*)ptr)->buffer, Buffer_type);
+                break;
+
+            case CMD_COPY_BUFFER:
+                INFLATE_PTR(((CmdCopyBuffer*)ptr)->src, Buffer_type);
+                INFLATE_PTR(((CmdCopyBuffer*)ptr)->dst, Buffer_type);
+
             // --- Compute ---
             case CMD_BIND_COMPUTE:        INFLATE_PTR(((CmdBindCompute*)ptr)->compute, Compute_type); break;
 
@@ -8299,6 +8373,11 @@ static PyObject *CommandBuffer_meth_patch(CommandBuffer *self, PyObject *args) {
             case CMD_SET_UNIFORM:
             case CMD_ASSERT_REG:
             case CMD_GEN_RAND:
+            case CMD_GET_TIME:
+            case CMD_GET_DELTA:
+            case CMD_CMP:
+            case CMD_SIN_COS:
+            case CMD_GET_STAT:
                 break;
 
             default: 
@@ -8424,11 +8503,11 @@ static PyObject *CommandBuffer_meth_jump_table(CommandBuffer *self, PyObject *ar
     // Record fixups for every target in the list
     for (uint32_t i = 0; i < count; i++) {
         PyObject *target = PyList_GetItem(targets_list, i);
-        size_t slot_offset = self->size + offsetof(CmdJumpTable, targets) + (i * 4);
+        size_t slot_offset = self->size + offsetof(CmdJumpTable, targets) + ((size_t)i * 4);
 
         if (PyUnicode_Check(target)) {
             // It's a label: add to fixups
-            PyObject *fixup = Py_BuildValue("KO", (unsigned long long)slot_offset, target);
+            PyObject *fixup = Py_BuildValue("KO", (size_t)slot_offset, target);
             PyList_Append(self->fixups, fixup);
             Py_DECREF(fixup);
             cmd->targets[i] = 0; // Placeholder
@@ -8482,6 +8561,14 @@ static const char* hgl_get_op_name(uint32_t type) {
         case CMD_DUMP: return "DUMP";
         case CMD_ASSERT_REG: return "ASSERT_REG";
         case CMD_GEN_RAND: return "GEN_RAND";
+        case CMD_GET_TIME: return "GET_TIME";
+        case CMD_GET_DELTA: return "GET_DELTA";
+        case CMD_CMP: return "CMP";
+        case CMD_SIN_COS: return "SIN_COS";
+        case CMD_BIND_SET_DRAW_INDIRECT: return "BIND_SET_DRAW_INDIRECT";
+        case CMD_SET_BUFFER_OFFSET: return "SET_BUFFER_OFFSET";
+        case CMD_GET_STAT: return "GET_STAT";
+        case CMD_COPY_BUFFER: return "COPY_BUFFER";
         default: return "UNKNOWN";
     }
 }
@@ -8581,15 +8668,25 @@ static PyObject *CommandBuffer_meth_disassemble(CommandBuffer *self, PyObject *P
                 snprintf(notes, 128, "Restore caller register i%u", r);
                 break;
             }
+            case CMD_GET_STAT: {
+                CmdGetStat *c = (CmdGetStat *)ptr;
+                const char* stats[] = {"draw_calls", "pipeline_swaps", "set_swaps", "dispatch_calls"};
+                snprintf(operands, 64, "i%u, %s", c->reg, (c->stat_id < 4) ? stats[c->stat_id] : "???");
+                snprintf(notes, 128, "Read telemetry into i%u", c->reg);
+                break;
+            }
             case CMD_LOAD_REG: {
                 CmdLoadReg *c = (CmdLoadReg *)ptr;
-                snprintf(operands, 64, "i%u, buf:%d, off:%u", c->reg, c->buffer->buffer, c->offset);
+                // CHANGE: Use c->buffer->name instead of buffer->buffer ID
+                snprintf(operands, 64, "i%u, \"%s\"[%u]", c->reg, c->buffer->name, c->offset);
                 snprintf(notes, 128, "Load value from GPU memory");
                 break;
             }
+
             case CMD_STORE_REG: {
                 CmdStoreReg *c = (CmdStoreReg *)ptr;
-                snprintf(operands, 64, "i%u, buf:%d, off:%u", c->reg, c->buffer->buffer, c->offset);
+                // CHANGE: Use c->buffer->name instead of buffer->buffer ID
+                snprintf(operands, 64, "i%u, \"%s\"[%u]", c->reg, c->buffer->name, c->offset);
                 snprintf(notes, 128, "Commit register to GPU memory");
                 break;
             }
@@ -8610,7 +8707,7 @@ static PyObject *CommandBuffer_meth_disassemble(CommandBuffer *self, PyObject *P
             }
             case CMD_CALL: {
                 CmdCall *c = (CmdCall *)ptr;
-                snprintf(operands, 64, "Buffer(%p)", (void*)c->other);
+                snprintf(operands, 64, "\"%s\"", c->other->name);
                 snprintf(notes, 128, "Execute subroutine");
                 break;
             }
@@ -8627,6 +8724,36 @@ static PyObject *CommandBuffer_meth_disassemble(CommandBuffer *self, PyObject *P
                 break;
             }
             case CMD_RET: snprintf(notes, 128, "Return to parent caller"); break;
+            case CMD_CMP: {
+                CmdCmp *c = (CmdCmp *)ptr;
+                snprintf(operands, 64, "i%u, i%u, i%u, %s", c->reg_dest, c->reg_a, c->reg_b, hgl_get_assert_op(c->op));
+                snprintf(notes, 128, "i%u = (i%u %s i%u)", c->reg_dest, c->reg_a, hgl_get_assert_op(c->op), c->reg_b);
+                break;
+            }
+            case CMD_SIN_COS: {
+                CmdSinCos *c = (CmdSinCos *)ptr;
+                snprintf(operands, 64, "i%u -> i%u, i%u", c->reg_in, c->reg_sin, c->reg_cos);
+                snprintf(notes, 128, "sin(i%u)->i%u, cos(i%u)->i%u", c->reg_in, c->reg_sin, c->reg_in, c->reg_cos);
+                break;
+            }
+            case CMD_BIND_SET_DRAW_INDIRECT: {
+                CmdBindSetDrawIndirect *c = (CmdBindSetDrawIndirect *)ptr;
+                snprintf(operands, 64, "Set(%p), Buf:%d", (void*)c->set, c->buffer->buffer);
+                snprintf(notes, 128, "OPTIMIZED: Material + Indirect Draw");
+                break;
+            }
+            case CMD_SET_BUFFER_OFFSET: {
+                CmdSetBufferOffset *c = (CmdSetBufferOffset *)ptr;
+                snprintf(operands, 64, "\"%s\", slot:%u, reg:i%u", c->buffer->name, c->slot, c->reg_off);
+                snprintf(notes, 128, "Sliding-window bind to %s slot %u", (c->type == 1) ? "SSBO" : "UBO", c->slot);
+                break;
+            }
+            case CMD_COPY_BUFFER: {
+                CmdCopyBuffer *c = (CmdCopyBuffer *)ptr;
+                snprintf(operands, 64, "\"%s\" -> \"%s\"", c->src->name, c->dst->name);
+                snprintf(notes, 128, "GPU Copy [reg:i%u -> i%u, sz:i%u]", c->reg_src, c->reg_dst, c->reg_size);
+                break;
+            }
             default: snprintf(notes, 128, "Size: %u bytes", header->size); break;
         }
 
@@ -8655,6 +8782,165 @@ static PyObject *CommandBuffer_meth_gen_rand(CommandBuffer *self, PyObject *arg)
     Py_RETURN_NONE;
 }
 
+static PyObject *CommandBuffer_meth_get_time(CommandBuffer *self, PyObject *arg) {
+    int reg = to_int(arg);
+    if (reg < 0 || reg > 7) return PyErr_Format(PyExc_ValueError, "0-7 required");
+    if (CommandBuffer_ensure(self, sizeof(CmdGetTime)) < 0) return NULL;
+    CmdGetTime *cmd = (CmdGetTime *)(self->data + self->size);
+    cmd->header.type = CMD_GET_TIME;
+    cmd->header.size = sizeof(CmdGetTime);
+    cmd->reg = (uint32_t)reg;
+    self->size += sizeof(CmdGetTime);
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_get_delta(CommandBuffer *self, PyObject *arg) {
+    int reg = to_int(arg);
+    if (reg < 0 || reg > 7) return PyErr_Format(PyExc_ValueError, "0-7 required");
+    if (CommandBuffer_ensure(self, sizeof(CmdGetTime)) < 0) return NULL;
+    CmdGetTime *cmd = (CmdGetTime *)(self->data + self->size);
+    cmd->header.type = CMD_GET_DELTA;
+    cmd->header.size = sizeof(CmdGetTime);
+    cmd->reg = (uint32_t)reg;
+    self->size += sizeof(CmdGetTime);
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_cmp(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
+    static char *kw[] = {"dest", "reg_a", "reg_b", "op", NULL};
+    int dest, a, b, op_code = 0;
+    PyObject *op_obj;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "iiiO", kw, &dest, &a, &b, &op_obj)) return NULL;
+
+    if (dest < 0 || dest > 7 || a < 0 || a > 7 || b < 0 || b > 7) 
+        return PyErr_Format(PyExc_ValueError, "Registers must be 0-7");
+
+    if (PyUnicode_Check(op_obj)) {
+        const char *s = PyUnicode_AsUTF8(op_obj);
+        if (strcmp(s, "==") == 0) op_code = 0;
+        else if (strcmp(s, "!=") == 0) op_code = 1;
+        else if (strcmp(s, "<") == 0)  op_code = 2;
+        else if (strcmp(s, ">") == 0)  op_code = 3;
+        else if (strcmp(s, "<=") == 0) op_code = 4;
+        else if (strcmp(s, ">=") == 0) op_code = 5;
+        else return PyErr_Format(PyExc_ValueError, "Unknown cmp op: %s", s);
+    } else {
+        op_code = (int)PyLong_AsLong(op_obj);
+    }
+
+    if (CommandBuffer_ensure(self, sizeof(CmdCmp)) < 0) return NULL;
+
+    CmdCmp *cmd = (CmdCmp *)(self->data + self->size);
+    cmd->header.type = CMD_CMP;
+    cmd->header.size = sizeof(CmdCmp);
+    cmd->reg_dest = (uint32_t)dest;
+    cmd->reg_a = (uint32_t)a;
+    cmd->reg_b = (uint32_t)b;
+    cmd->op = (uint32_t)op_code;
+
+    self->size += sizeof(CmdCmp);
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_sin_cos(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
+    static char *kw[] = {"reg_in", "dest_sin", "dest_cos", NULL};
+    int in, s_out, c_out;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "iii", kw, &in, &s_out, &c_out)) return NULL;
+
+    if (in < 0 || in > 7 || s_out < 0 || s_out > 7 || c_out < 0 || c_out > 7) 
+        return PyErr_Format(PyExc_ValueError, "Registers must be 0-7");
+
+    if (CommandBuffer_ensure(self, sizeof(CmdSinCos)) < 0) return NULL;
+
+    CmdSinCos *cmd = (CmdSinCos *)(self->data + self->size);
+    cmd->header.type = CMD_SIN_COS;
+    cmd->header.size = sizeof(CmdSinCos);
+    cmd->reg_in = (uint32_t)in;
+    cmd->reg_sin = (uint32_t)s_out;
+    cmd->reg_cos = (uint32_t)c_out;
+
+    self->size += sizeof(CmdSinCos);
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_set_buffer_offset(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
+    static char *kw[] = {"buffer", "slot", "reg", "size", "type", NULL};
+    PyObject *buf_obj;
+    int slot, reg, size;
+    const char *type_str = "uniform";
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O!iii|s", kw, 
+        self->ctx->module_state->Buffer_type, &buf_obj, &slot, &reg, &size, &type_str)) return NULL;
+
+    uint32_t type_enum = (strcmp(type_str, "storage") == 0) ? 1 : 0;
+
+    if (CommandBuffer_ensure(self, sizeof(CmdSetBufferOffset)) < 0) return NULL;
+
+    CmdSetBufferOffset *cmd = (CmdSetBufferOffset *)(self->data + self->size);
+    cmd->header.type = CMD_SET_BUFFER_OFFSET;
+    cmd->header.size = sizeof(CmdSetBufferOffset);
+    cmd->buffer = (Buffer *)buf_obj;
+    cmd->slot = (uint32_t)slot;
+    cmd->reg_off = (uint32_t)reg;
+    cmd->size = (uint32_t)size;
+    cmd->type = type_enum;
+
+    CommandBuffer_push_ref(self, buf_obj);
+    self->size += sizeof(CmdSetBufferOffset);
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_get_stat(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
+    static char *kw[] = {"reg", "stat", NULL};
+    int reg, stat_id = 0;
+    const char *stat_name;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "is", kw, &reg, &stat_name)) return NULL;
+
+    if (strcmp(stat_name, "draw_calls") == 0) stat_id = 0;
+    else if (strcmp(stat_name, "pipeline_swaps") == 0) stat_id = 1;
+    else if (strcmp(stat_name, "set_swaps") == 0) stat_id = 2;
+    else if (strcmp(stat_name, "dispatch_calls") == 0) stat_id = 3;
+
+    if (CommandBuffer_ensure(self, sizeof(CmdGetStat)) < 0) return NULL;
+    CmdGetStat *cmd = (CmdGetStat *)(self->data + self->size);
+    cmd->header.type = CMD_GET_STAT;
+    cmd->header.size = sizeof(CmdGetStat);
+    cmd->reg = reg;
+    cmd->stat_id = stat_id;
+    self->size += sizeof(CmdGetStat);
+    Py_RETURN_NONE;
+}
+
+static PyObject *CommandBuffer_meth_copy_buffer(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
+    static char *kw[] = {"src", "dst", "src_reg", "dst_reg", "size_reg", NULL};
+    PyObject *src_obj, *dst_obj;
+    int src_r, dst_r, size_r;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O!O!iii", kw, 
+        self->ctx->module_state->Buffer_type, &src_obj,
+        self->ctx->module_state->Buffer_type, &dst_obj,
+        &src_r, &dst_r, &size_r)) return NULL;
+
+    if (CommandBuffer_ensure(self, sizeof(CmdCopyBuffer)) < 0) return NULL;
+
+    CmdCopyBuffer *cmd = (CmdCopyBuffer *)(self->data + self->size);
+    cmd->header.type = CMD_COPY_BUFFER;
+    cmd->header.size = sizeof(CmdCopyBuffer);
+    cmd->src = (Buffer *)src_obj;
+    cmd->dst = (Buffer *)dst_obj;
+    cmd->reg_src = (uint32_t)src_r;
+    cmd->reg_dst = (uint32_t)dst_r;
+    cmd->reg_size = (uint32_t)size_r;
+
+    CommandBuffer_push_ref(self, src_obj);
+    CommandBuffer_push_ref(self, dst_obj);
+    self->size += sizeof(CmdCopyBuffer);
+    Py_RETURN_NONE;
+}
+
 /**
  * Internal Recursive Executor for Command Buffers.
  *
@@ -8664,13 +8950,15 @@ static PyObject *CommandBuffer_meth_gen_rand(CommandBuffer *self, PyObject *arg)
  * @param active_compute Double pointer to track the current Compute Pipeline across calls.
  * @param active_set     Double pointer to track the current DescriptorSet across calls.
  * @return
-   HGL_STATUS_OK               = 0,
-   HGL_STATUS_ERR_STACK_OVER   = 1,
-   HGL_STATUS_ERR_STACK_UNDER  = 2,
-   HGL_STATUS_ERR_INVALID_OP   = 3,
-   HGL_STATUS_ERR_SIGNAL       = 4,
-   HGL_STATUS_ERR_NESTED_LIMIT = 5,
+   HGL_STATUS_OK               = 0
+   HGL_STATUS_ERR_STACK_OVER   = 1
+   HGL_STATUS_ERR_STACK_UNDER  = 2
+   HGL_STATUS_ERR_INVALID_OP   = 3
+   HGL_STATUS_ERR_SIGNAL       = 4
+   HGL_STATUS_ERR_NESTED_LIMIT = 5
    HGL_STATUS_ERR_UNFINISHED   = 6
+   HGL_STATUS_ERR_BUDGET       = 7
+   HGL_STATUS_ERR_ASSERT       = 8
  */
 static int CommandBuffer_execute_internal(CommandBuffer *self, int depth,
                                           Pipeline **active_pipe,
@@ -8813,13 +9101,13 @@ static int CommandBuffer_execute_internal(CommandBuffer *self, int depth,
       if (LIKELY(p != NULL)) {
         CmdDrawIndirect *c = (CmdDrawIndirect *)ptr;
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, c->buffer->buffer);
-        int s = c->stride != 0
-                    ? c->stride
-                    : (p->index_type ? sizeof(DrawElementsIndirectCommand)
-                                     : sizeof(DrawArraysIndirectCommand));
+        GLsizei s = (GLsizei)(c->stride != 0 
+            ? c->stride 
+            : (p->index_type ? sizeof(DrawElementsIndirectCommand) 
+                             : sizeof(DrawArraysIndirectCommand)));
 
         glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
-        void *off = (void *)(intptr_t)c->offset;
+        const void *off = (const char *)NULL + (uint32_t)c->offset;
 
         if (p->index_type) {
           glMultiDrawElementsIndirect(p->topology, p->index_type, off, c->count,
@@ -9210,8 +9498,10 @@ static int CommandBuffer_execute_internal(CommandBuffer *self, int depth,
                             GL_SHADER_STORAGE_BARRIER_BIT | 
                             GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT);
 
-            int s = c->stride ? c->stride : (p->index_type ? 20 : 16);
-            void* off = (void*)(intptr_t)c->offset;
+            GLsizei s = (GLsizei)(c->stride != 0 ? c->stride : 
+            (p->index_type ? sizeof(DrawElementsIndirectCommand) 
+                           : sizeof(DrawArraysIndirectCommand)));
+            void* off = (char*)NULL + (uintptr_t)c->offset;
             intptr_t c_off = (intptr_t)c->count_offset;
 
             if (p->index_type) {
@@ -9275,7 +9565,7 @@ static int CommandBuffer_execute_internal(CommandBuffer *self, int depth,
             case 3: pass = (val >  c->value); break;
             case 4: pass = (val <= c->value); break;
             case 5: pass = (val >= c->value); break;
-            default: break;
+            default: continue;
         }
         if (UNLIKELY(!pass)) return HGL_STATUS_ERR_ASSERT;
         break;
@@ -9290,6 +9580,127 @@ static int CommandBuffer_execute_internal(CommandBuffer *self, int depth,
         ctx->vm_seed = x; // Update global context seed
         
         regs[c->reg & 7] = x;
+        break;
+    }
+    case CMD_GET_TIME: {
+        CmdGetTime *c = (CmdGetTime *)ptr;
+        float t = (float)(hgl_get_absolute_time() - ctx->start_time);
+        memcpy(&regs[c->reg & 7], &t, 4); // Bit-cast float to uint32 register
+        break;
+    }
+    case CMD_GET_DELTA: {
+        CmdGetTime *c = (CmdGetTime *)ptr;
+        float dt = ctx->frame_delta;
+        memcpy(&regs[c->reg & 7], &dt, 4);
+        break;
+    }
+    case CMD_CMP: {
+        CmdCmp *c = (CmdCmp *)ptr;
+        uint32_t va = regs[c->reg_a & 7];
+        uint32_t vb = regs[c->reg_b & 7];
+        int res = 0;
+        switch (c->op) {
+            case 0: res = (va == vb); break;
+            case 1: res = (va != vb); break;
+            case 2: res = (va <  vb); break;
+            case 3: res = (va >  vb); break;
+            case 4: res = (va <= vb); break;
+            case 5: res = (va >= vb); break;
+            default: continue;
+        }
+        regs[c->reg_dest & 7] = (uint32_t)res;
+        break;
+    }
+    case CMD_SIN_COS: {
+        CmdSinCos *c = (CmdSinCos *)ptr;
+        float in_val;
+        // Bit-cast the register bits to a float
+        memcpy(&in_val, &regs[c->reg_in & 7], 4);
+        
+        float s = sinf(in_val);
+        float co = cosf(in_val);
+        
+        // Bit-cast results back to the destination registers
+        memcpy(&regs[c->reg_sin & 7], &s, 4);
+        memcpy(&regs[c->reg_cos & 7], &co, 4);
+        break;
+    }
+    case CMD_BIND_SET_DRAW_INDIRECT: {
+        CmdBindSetDrawIndirect *c = (CmdBindSetDrawIndirect *)ptr;
+        
+        // 1. Tier 1 Material Optimization
+        if (*active_set != c->set) {
+            Atomic_Increment(&ctx->stats.set_swaps);
+            bind_descriptor_set_internal(ctx, c->set);
+            *active_set = c->set;
+        }
+
+        Pipeline *p = *active_pipe;
+        if (LIKELY(p != NULL)) {
+            Atomic_Increment(&ctx->stats.draw_calls);
+            
+            glBindBuffer(GL_DRAW_INDIRECT_BUFFER, c->buffer->buffer);
+            glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT | GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT);
+
+            GLsizei s = (GLsizei)(c->stride != 0 ? c->stride : 
+                    (p->index_type ? sizeof(DrawElementsIndirectCommand) 
+                                   : sizeof(DrawArraysIndirectCommand)));
+            void* off = (char*)NULL + (uintptr_t)c->offset;
+
+            if (p->index_type) {
+                glMultiDrawElementsIndirect(p->topology, p->index_type, off, c->count, s);
+            } else {
+                glMultiDrawArraysIndirect(p->topology, off, c->count, s);
+            }
+        }
+        break;
+    }
+    case CMD_SET_BUFFER_OFFSET: {
+        CmdSetBufferOffset *c = (CmdSetBufferOffset *)ptr;
+        uint32_t offset = regs[c->reg_off & 7];
+        
+        // Invalidate Tier 1 tracker
+        *active_set = NULL; 
+
+        if (c->type == 1) { // Storage
+            glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+            glBindBufferRange(GL_SHADER_STORAGE_BUFFER, c->slot, c->buffer->buffer, (intptr)offset, (intptr)c->size);
+        } else { // Uniform
+            glMemoryBarrier(GL_UNIFORM_BARRIER_BIT); // 0x00000004
+            glBindBufferRange(GL_UNIFORM_BUFFER, c->slot, c->buffer->buffer, (intptr)offset, (intptr)c->size);
+        }
+        break;
+    }
+    case CMD_GET_STAT: {
+        CmdGetStat *c = (CmdGetStat *)ptr;
+        long val = 0;
+        switch (c->stat_id) {
+            case 0: val = Atomic_Load(&ctx->stats.draw_calls); break;
+            case 1: val = Atomic_Load(&ctx->stats.pipeline_swaps); break;
+            case 2: val = Atomic_Load(&ctx->stats.set_swaps); break;
+            case 3: val = Atomic_Load(&ctx->stats.dispatch_calls); break;
+            default: continue;
+        }
+        regs[c->reg & 7] = (uint32_t)val;
+        break;
+    }
+    case CMD_COPY_BUFFER: {
+        CmdCopyBuffer *c = (CmdCopyBuffer *)ptr;
+        
+        uint32_t off_s = regs[c->reg_src  & 7];
+        uint32_t off_d = regs[c->reg_dst  & 7];
+        uint32_t size  = regs[c->reg_size & 7];
+
+        if (size > 0) {
+            glBindBuffer(GL_COPY_READ_BUFFER,  c->src->buffer);
+            glBindBuffer(GL_COPY_WRITE_BUFFER, c->dst->buffer);
+            
+            // Barrier to ensure any previous writes (Compute/CPU) are finished
+            glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT | GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT);
+            
+            glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 
+                                (intptr)off_s, (intptr)off_d, (intptr)size);
+        }
         break;
     }
     default:
@@ -9336,6 +9747,10 @@ static PyObject *CommandBuffer_meth_submit(CommandBuffer *self, PyObject *args, 
     uint32_t *sp = vm_stack; // The moving pointer
     
     int status = 0;
+
+    double now = hgl_get_absolute_time();
+    self->ctx->frame_delta = (float)(now - self->ctx->last_frame_time);
+    self->ctx->last_frame_time = now;
 
     Py_BEGIN_ALLOW_THREADS
     PyMutex_Lock(&self->ctx->state_lock);
@@ -9398,6 +9813,7 @@ static PyObject *CommandBuffer_meth_submit(CommandBuffer *self, PyObject *args, 
 static PyObject *CommandBuffer_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
     CommandBuffer *self = (CommandBuffer *)type->tp_alloc(type, 0);
     if (self) {
+        snprintf(self->name, sizeof(self->name), "%s", "unnamed_command_buffer");
         self->size = 0;
         self->capacity = 4096; // 4KB start
         self->data = PyMem_Malloc(self->capacity);
@@ -9412,6 +9828,22 @@ static PyObject *CommandBuffer_new(PyTypeObject *type, PyObject *args, PyObject 
         PyObject_GC_Track(self); 
     }
     return (PyObject *)self;
+}
+
+static PyObject* CommandBuffer_get_name(CommandBuffer *self, void *closure) {
+    return PyUnicode_FromString(self->name);
+}
+
+static int CommandBuffer_set_name(CommandBuffer *self, PyObject *value, void *closure) {
+    if (!PyUnicode_Check(value)) {
+        PyErr_SetString(PyExc_TypeError, "The name must be a string");
+        return -1;
+    }
+    const char *str = PyUnicode_AsUTF8(value);
+    if (!str) return -1;
+
+    snprintf(self->name, sizeof(self->name), "%s", str);
+    return 0;
 }
 
 static void CommandBuffer_dealloc(CommandBuffer *self) {
@@ -9464,7 +9896,7 @@ static PyMethodDef Context_methods[] = {
     {"migrate", (PyCFunction)Context_meth_migrate, METH_NOARGS, NULL},
     {"release_thread", (PyCFunction)Context_meth_release_thread, METH_NOARGS, NULL},
     {"fence", (PyCFunction)Context_meth_fence, METH_NOARGS, NULL},
-    {"command_buffer", (PyCFunction)Context_meth_command_buffer, METH_NOARGS, NULL},
+    {"command_buffer", (PyCFunction)Context_meth_command_buffer, METH_VARARGS | METH_KEYWORDS, NULL},
     {"reset_stats", (PyCFunction)Context_meth_reset_stats, METH_NOARGS, NULL},
     {"invalidate_state", (PyCFunction)Context_meth_invalidate_state, METH_NOARGS, NULL},
     {"finish", (PyCFunction)Context_meth_finish, METH_NOARGS, 
@@ -9506,6 +9938,11 @@ static PyMemberDef Buffer_members[] = {
     {0},
 };
 
+static PyGetSetDef Buffer_getset[] = {
+    {"name", (getter)Buffer_get_name, (setter)Buffer_set_name, "Name of the buffer", NULL},
+    {0}
+};
+
 static PyMethodDef Image_methods[] = {
     {"clear", (PyCFunction)Image_meth_clear, METH_NOARGS, NULL},
     {"write", (PyCFunction)Image_meth_write, METH_VARARGS | METH_KEYWORDS,
@@ -9523,6 +9960,7 @@ static PyMethodDef Image_methods[] = {
 static PyGetSetDef Image_getset[] = {
     {"clear_value", (getter)Image_get_clear_value,
      (setter)Image_set_clear_value, "The clear value of the image", NULL},
+    {"name", (getter)Image_get_name, (setter)Image_set_name, NULL, NULL},
     {0}};
 
 static PyMemberDef Image_members[] = {
@@ -9606,21 +10044,22 @@ static PyMethodDef Fence_methods[] = {
 
 static PyMethodDef CommandBuffer_methods[] = {
     // --- Lifecycle & Management ---
-    {"begin",               (PyCFunction)CommandBuffer_meth_begin,               METH_NOARGS,  NULL},
-    {"end",                 (PyCFunction)CommandBuffer_meth_end,                 METH_NOARGS,  NULL},
-    {"submit",              (PyCFunction)CommandBuffer_meth_submit,              METH_VARARGS | METH_KEYWORDS, NULL},
-    {"tell",                (PyCFunction)CommandBuffer_meth_tell,                METH_NOARGS,  NULL},
-    {"nop",                 (PyCFunction)CommandBuffer_meth_nop,                 METH_VARARGS, NULL},
-    {"erase",               (PyCFunction)CommandBuffer_meth_erase,               METH_O,       NULL},
+    {"begin",       (PyCFunction)CommandBuffer_meth_begin, METH_NOARGS,  NULL},
+    {"end",                  (PyCFunction)CommandBuffer_meth_end,                 METH_NOARGS,  NULL},
+    {"submit",               (PyCFunction)CommandBuffer_meth_submit,              METH_VARARGS | METH_KEYWORDS, NULL},
+    {"tell",                 (PyCFunction)CommandBuffer_meth_tell,                METH_NOARGS,  NULL},
+    {"nop",                  (PyCFunction)CommandBuffer_meth_nop,                 METH_VARARGS, NULL},
+    {"erase",                (PyCFunction)CommandBuffer_meth_erase,               METH_O,       NULL},
 
     // --- Graphics Operations ---
-    {"clear",               (PyCFunction)CommandBuffer_meth_clear,               METH_VARARGS, NULL},
-    {"bind_pipeline",       (PyCFunction)CommandBuffer_meth_bind_pipeline,       METH_VARARGS, NULL},
-    {"bind_descriptor_set", (PyCFunction)CommandBuffer_meth_bind_descriptor_set, METH_VARARGS, NULL},
-    {"draw",                (PyCFunction)CommandBuffer_meth_draw,                METH_VARARGS | METH_KEYWORDS, NULL},
-    {"draw_indirect",       (PyCFunction)CommandBuffer_meth_draw_indirect,      METH_VARARGS | METH_KEYWORDS, NULL},
-    {"draw_indirect_count", (PyCFunction)CommandBuffer_meth_draw_indirect_count,METH_VARARGS | METH_KEYWORDS, NULL},
-    {"set_uniform",         (PyCFunction)CommandBuffer_meth_set_uniform,        METH_VARARGS | METH_KEYWORDS, NULL},
+    {"clear",                (PyCFunction)CommandBuffer_meth_clear,               METH_VARARGS, NULL},
+    {"bind_pipeline",        (PyCFunction)CommandBuffer_meth_bind_pipeline,       METH_VARARGS, NULL},
+    {"bind_descriptor_set",  (PyCFunction)CommandBuffer_meth_bind_descriptor_set, METH_VARARGS, NULL},
+    {"draw",                 (PyCFunction)CommandBuffer_meth_draw,                METH_VARARGS | METH_KEYWORDS, NULL},
+    {"draw_indirect",       (PyCFunction)CommandBuffer_meth_draw_indirect,       METH_VARARGS | METH_KEYWORDS, NULL},
+    {"draw_indirect_count", (PyCFunction)CommandBuffer_meth_draw_indirect_count, METH_VARARGS | METH_KEYWORDS, NULL},
+    {"set_uniform",         (PyCFunction)CommandBuffer_meth_set_uniform,         METH_VARARGS | METH_KEYWORDS, NULL},
+    {"copy_buffer",         (PyCFunction)CommandBuffer_meth_copy_buffer,         METH_VARARGS | METH_KEYWORDS, NULL},
 
     // --- Compute Operations ---
     {"bind_compute",        (PyCFunction)CommandBuffer_meth_bind_compute,        METH_VARARGS, NULL},
@@ -9651,15 +10090,22 @@ static PyMethodDef CommandBuffer_methods[] = {
     {"store_reg",           (PyCFunction)CommandBuffer_meth_store_reg,           METH_VARARGS | METH_KEYWORDS, NULL},
     {"alu",                 (PyCFunction)CommandBuffer_meth_alu,                 METH_VARARGS | METH_KEYWORDS, NULL},
     {"gen_rand",            (PyCFunction)CommandBuffer_meth_gen_rand,            METH_O,       NULL},
+    {"get_time",            (PyCFunction)CommandBuffer_meth_get_time,            METH_O,       NULL},
+    {"get_delta",           (PyCFunction)CommandBuffer_meth_get_delta,           METH_O,       NULL},
+    {"cmp",                 (PyCFunction)CommandBuffer_meth_cmp,                 METH_VARARGS | METH_KEYWORDS, NULL},
+    {"sin_cos",             (PyCFunction)CommandBuffer_meth_sin_cos,             METH_VARARGS | METH_KEYWORDS, NULL},
+
     // --- Synchronization ---
     {"signal",              (PyCFunction)CommandBuffer_meth_signal,              METH_O,       NULL},
     {"wait",                (PyCFunction)CommandBuffer_meth_wait,                METH_O,       NULL},
     {"skip_if_not_ready",   (PyCFunction)CommandBuffer_meth_skip_if_not_ready,   METH_O,       NULL},
+    {"set_buffer_offset",   (PyCFunction)CommandBuffer_meth_set_buffer_offset,   METH_VARARGS | METH_KEYWORDS, NULL},
 
     // --- Debugging & Introspection ---
     {"print",               (PyCFunction)CommandBuffer_meth_print,               METH_VARARGS | METH_KEYWORDS, NULL},
     {"dump",                (PyCFunction)CommandBuffer_meth_dump,                METH_VARARGS | METH_KEYWORDS, NULL},
     {"assert_reg",          (PyCFunction)CommandBuffer_meth_assert_reg,          METH_VARARGS | METH_KEYWORDS, NULL},
+    {"get_stat",            (PyCFunction)CommandBuffer_meth_get_stat,            METH_VARARGS | METH_KEYWORDS, NULL},
 
     // --- Relocation ---
     {"serialize",           (PyCFunction)CommandBuffer_meth_serialize,           METH_NOARGS,  NULL},
@@ -9670,6 +10116,11 @@ static PyMethodDef CommandBuffer_methods[] = {
 
 static PyMemberDef CommandBuffer_members[] = {
     {"ctx", Py_T_OBJECT_EX, offsetof(CommandBuffer, ctx), Py_READONLY, "The context this buffer belongs to"},
+    {0}
+};
+
+static PyGetSetDef CommandBuffer_getset[] = {
+    {"name", (getter)CommandBuffer_get_name, (setter)CommandBuffer_set_name, "Name of the command buffer", NULL},
     {0}
 };
 
@@ -9697,6 +10148,7 @@ static PyType_Slot Buffer_slots[] = {
     {Py_tp_methods, Buffer_methods},
     {Py_tp_members, Buffer_members},
     {Py_bf_getbuffer, (void *)Buffer_getbuffer},
+    {Py_tp_getset, Buffer_getset},
     {Py_tp_dealloc, (void *)Buffer_dealloc},
     {Py_tp_traverse, (void *)Buffer_traverse},
     {Py_tp_clear, (void *)Buffer_clear},
@@ -9777,6 +10229,7 @@ static PyType_Slot CommandBuffer_slots[] = {
     {Py_tp_clear, CommandBuffer_clear},
     {Py_tp_methods, CommandBuffer_methods},
     {Py_tp_members, CommandBuffer_members},
+    {Py_tp_getset, CommandBuffer_getset},
     {0}
 };
 
