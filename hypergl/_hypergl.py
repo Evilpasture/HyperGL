@@ -925,13 +925,14 @@ class SceneCompiler:
     def condition(self, buffer, offset: int, invert: bool = False):
         """
         Bytecode Construct: IF (Memory-based)
-        Skips the block if a value in GPU memory is 0 (or not 0).
         """
         exit_label = self._get_unique_label("cond_exit")
         if invert:
-            self.cb.skip_if_not_zero(buffer, offset)
-        else:
+            # If it IS zero, skip the 'goto exit'
             self.cb.skip_if_zero(buffer, offset)
+        else:
+            # If it is NOT zero, skip the 'goto exit'
+            self.cb.skip_if_not_zero(buffer, offset)
             
         self.cb.goto(exit_label)
         yield
@@ -941,18 +942,31 @@ class SceneCompiler:
     def reg_condition(self, reg: int, invert: bool = False):
         """
         Bytecode Construct: IF (Register-based)
-        Skips the block if register i[reg] is 0 (or not 0).
-        Useful after performing ALU operations.
         """
         exit_label = self._get_unique_label("reg_cond_exit")
         if invert:
-            self.cb.skip_reg_not_zero(reg)
-        else:
+            # If it IS zero, skip the 'goto exit'
             self.cb.skip_reg_zero(reg)
+        else:
+            # If it is NOT zero, skip the 'goto exit'
+            self.cb.skip_reg_not_zero(reg)
             
         self.cb.goto(exit_label)
         yield
         self.cb.label(exit_label)
+
+    @contextlib.contextmanager
+    def if_cond(self, reg_a: int, reg_b: int, op: str):
+        """
+        Bytecode Construct: High-level IF
+        Combines CMP and reg_condition.
+        Example: with sc.if_cond(0, 1, '<'): ...
+        """
+        temp_reg = 7 # Use the last register as a scratchpad for the result
+        self.cb.cmp(temp_reg, reg_a, reg_b, op)
+        with self.reg_condition(temp_reg):
+            yield
+
     @contextlib.contextmanager
     def scope(self, registers: list[int]):
         """
@@ -1030,6 +1044,55 @@ class SceneCompiler:
         self.cb.goto(exit_label)
         self.cb.label(exit_label)
 
+    def set_f32(self, reg: int, value: float):
+        """Sets an internal VM register to a float32 bit-pattern."""
+        bits = struct.unpack('I', struct.pack('f', value))[0]
+        self.cb.set_iter(reg, bits)
+
+    def set_u32(self, reg: int, value: int):
+        """Sets an internal VM register to an unsigned 32-bit integer."""
+        self.cb.set_iter(reg, value)
+
+    def gen_rand_f32(self, dest_reg: int):
+        """
+        Generates a float32 in range [0.0, 1.0] using only VM instructions.
+        Pattern: (Xorshift bits & 0x7FFFFF) | 0x3F800000 -> subtract 1.0
+        """
+        self.cb.gen_rand(dest_reg)
+        
+        # 1. Mask to get fractional bits (23 bits)
+        self.cb.set_iter(6, 0x007FFFFF)
+        self.cb.alu(dest_reg, 6, 'and')
+        
+        # 2. Or with 1.0 exponent bits (0x3F800000)
+        self.cb.set_iter(6, 0x3F800000)
+        self.cb.alu(dest_reg, 6, 'or')
+        
+        # Now dest_reg is a float in range [1.0, 2.0]
+        # 3. Subtract 1.0 to get [0.0, 1.0]
+        self.set_f32(6, 1.0)
+        self.cb.alu(dest_reg, 6, 'sub') # Note: ALU sub works on float bits!
+
+    def inject_uniform(self, pipeline_or_compute, name: str, reg: int, type: str = "float"):
+        """
+        Looks up a uniform by name and emits a SET_UNIFORM instruction.
+        """
+        import hypergl
+        info = hypergl.inspect(pipeline_or_compute)
+        interface = info.get('interface', ([], [], []))
+        uniforms = interface[1]
+        
+        location = -1
+        for u in uniforms:
+            if u['name'] == name:
+                location = u['location']
+                break
+        
+        if location == -1:
+            raise KeyError(f"Uniform '{name}' not found in program.")
+            
+        self.cb.set_uniform(location, reg, type)
+
 def subroutine(func):
     """
     Decorator for Command Buffer Subroutines.
@@ -1047,7 +1110,7 @@ def subroutine(func):
         
         if ctx_id not in func._hgl_cache:
             # Create a child buffer for this specific context
-            sub_cb = cb.ctx.command_buffer()
+            sub_cb = cb.ctx.command_buffer(name=func.__name__) 
             sub_cb.begin()
             func(sub_cb, *args, **kwargs)
             sub_cb.end()
