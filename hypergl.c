@@ -3319,6 +3319,10 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
   res->current_descriptor_set = NULL;
   res->current_global_settings = NULL;
 
+  res->start_time = hgl_get_absolute_time();
+  res->last_frame_time = res->start_time;
+  res->frame_delta = 0.0f;
+
   res->vm_seed = (uint32_t)time(NULL) ^ 0x9E3779B9;
 
   memset(&res->stats, 0, sizeof(ContextStats));
@@ -3327,7 +3331,7 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
   // function will actually communicate with the hardware.
   memset(&res->gl_state, GL_STATE_UNKNOWN, sizeof(res->gl_state));
 
-    res->current_read_framebuffer = -1;
+  res->current_read_framebuffer = -1;
   res->current_draw_framebuffer = -1;
   res->current_program = -1;
   res->current_vertex_array = -1;
