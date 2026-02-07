@@ -343,17 +343,47 @@ def headless_context_windows():
     opengl32 = windll.opengl32
     kernel32 = windll.kernel32
 
-    # --- CRITICAL: Set restype for pointer-returning functions BEFORE calling them ---
-    opengl32.wglGetProcAddress.restype = c_void_p  # <--- FIXES THE 0xFFFFFFFF CRASH
-    opengl32.wglCreateContext.restype = HGLRC
+    # =========================================================================
+    # THE TYPE SAFETY BLOCK (Crucial for x64)
+    # =========================================================================
+    
+    # --- kernel32 ---
     kernel32.GetModuleHandleW.restype = HANDLE
+    kernel32.GetLastError.restype = DWORD
 
+    # --- user32 ---
     user32.GetDC.argtypes = [HWND]
     user32.GetDC.restype = HDC
+    user32.ReleaseDC.argtypes = [HWND, HDC]
+    user32.ReleaseDC.restype = c_int
+    user32.DestroyWindow.argtypes = [HWND]
+    user32.DestroyWindow.restype = BOOL
     user32.RegisterClassExW.argtypes = [c_void_p]
     user32.RegisterClassExW.restype = WORD
+    user32.DefWindowProcW.argtypes = [HWND, UINT, c_size_t, c_ssize_t]
+    user32.DefWindowProcW.restype = c_ssize_t
     user32.CreateWindowExW.argtypes = [DWORD, LPCWSTR, LPCWSTR, DWORD, c_int, c_int, c_int, c_int, HWND, HANDLE, HANDLE, c_void_p]
     user32.CreateWindowExW.restype = HWND
+
+    # --- gdi32 ---
+    gdi32.ChoosePixelFormat.argtypes = [HDC, c_void_p]
+    gdi32.ChoosePixelFormat.restype = c_int
+    gdi32.SetPixelFormat.argtypes = [HDC, c_int, c_void_p]
+    gdi32.SetPixelFormat.restype = BOOL
+
+    # --- opengl32 ---
+    opengl32.wglCreateContext.argtypes = [HDC] # <--- THIS WAS THE MISSING LINE
+    opengl32.wglCreateContext.restype = HGLRC
+    opengl32.wglMakeCurrent.argtypes = [HDC, HGLRC]
+    opengl32.wglMakeCurrent.restype = BOOL
+    opengl32.wglDeleteContext.argtypes = [HGLRC]
+    opengl32.wglDeleteContext.restype = BOOL
+    opengl32.wglGetProcAddress.argtypes = [ctypes.c_char_p]
+    opengl32.wglGetProcAddress.restype = c_void_p 
+    opengl32.glGetString.argtypes = [c_int]
+    opengl32.glGetString.restype = ctypes.c_char_p
+
+    # =========================================================================
 
     class WNDCLASSEXW(Structure):
         _fields_ = [("cbSize", UINT), ("style", UINT), ("lpfnWndProc", c_void_p), ("cbClsExtra", c_int), ("cbWndExtra", c_int), ("hInstance", HANDLE), ("hIcon", HICON), ("hCursor", HCURSOR), ("hbrBackground", HBRUSH), ("lpszMenuName", LPCWSTR), ("lpszClassName", LPCWSTR), ("hIconSm", HICON)]
@@ -375,31 +405,21 @@ def headless_context_windows():
     uid = f"HyperGL_{time.time_ns()}"
     h_real = create_hidden_window(uid)
     hdc_real = user32.GetDC(h_real)
+    
     pfd = PIXELFORMATDESCRIPTOR(nSize=sizeof(PIXELFORMATDESCRIPTOR), nVersion=1, dwFlags=37, iPixelType=0, cColorBits=32, cDepthBits=24, cStencilBits=8)
-
-    # --- GDI32 Setup ---
-    gdi32.ChoosePixelFormat.argtypes = [HDC, c_void_p]
-    gdi32.ChoosePixelFormat.restype = c_int
-
-    gdi32.SetPixelFormat.argtypes = [HDC, c_int, c_void_p]
-    gdi32.SetPixelFormat.restype = BOOL
     pf = gdi32.ChoosePixelFormat(hdc_real, byref(pfd))
     gdi32.SetPixelFormat(hdc_real, pf, byref(pfd))
 
-    # Create temporary context to get extension pointers
+    # --- Now all pointers are safe ---
     rc_temp = opengl32.wglCreateContext(hdc_real)
     opengl32.wglMakeCurrent(hdc_real, rc_temp)
 
-    # Get the extension function
     wglCreateCtx_ptr = opengl32.wglGetProcAddress(b"wglCreateContextAttribsARB")
     
     rc_real = None
     if wglCreateCtx_ptr:
-        # Cast the pointer to a callable function
         WGLCREATECTX = ctypes.WINFUNCTYPE(HGLRC, HDC, HGLRC, POINTER(c_int))
         wglCreateCtx = WGLCREATECTX(wglCreateCtx_ptr)
-        
-        # Try Core Profiles
         for ver in [(4,6), (4,5), (3,3)]:
             attrs = (c_int * 7)(0x2091, ver[0], 0x2092, ver[1], 0x9126, 0x1, 0)
             try:
