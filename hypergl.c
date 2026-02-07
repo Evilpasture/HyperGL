@@ -1639,14 +1639,12 @@ static DescriptorSet *build_descriptor_set(Context *self, PyObject *bindings) {
   }
 
   DescriptorSet *res =
-      PyObject_New(DescriptorSet, self->module_state->DescriptorSet_type);
+      PyObject_GC_New(DescriptorSet, self->module_state->DescriptorSet_type);
   if (!res) {
     return NULL;
   }
+  memset((char *)res + sizeof(PyObject), 0, sizeof(DescriptorSet) - sizeof(PyObject));
   res->uses = 1;
-  zeromem(&res->uniform_buffers, sizeof(DescriptorSetBuffers));
-  zeromem(&res->storage_buffers, sizeof(DescriptorSetBuffers));
-  zeromem(&res->samplers, sizeof(DescriptorSetSamplers));
 
   res->uniform_buffers =
       build_descriptor_set_buffers(self, PyTuple_GetItem(bindings, 0));
@@ -1672,16 +1670,19 @@ static DescriptorSet *build_descriptor_set(Context *self, PyObject *bindings) {
 
   res->uses = 1;
 
+  PyObject_GC_Track(res);
+
   PyObject *existing = NULL;
   int result = PyDict_SetDefaultRef(self->descriptor_set_cache, bindings,
                                     (PyObject *)res, &existing);
 
   if (result < 0) {
+    // Error occurred, res will be DECREF'd, triggering dealloc -> Untrack
     goto error_cleanup;
   }
 
   if (result > 0) {
-    Py_DECREF(res);
+    Py_DECREF(res); // triggers dealloc -> Untrack
     DescriptorSet *ds = (DescriptorSet *)existing;
     Atomic_Increment(&ds->uses);
     return ds; // SetDefaultRef gave us a strong ref, return it.
@@ -6815,19 +6816,63 @@ static void BufferView_dealloc(BufferView *self) {
   PyObject_Del(self);
 }
 
+static int DescriptorSet_traverse(DescriptorSet *self, visitproc visit, void *arg) {
+    Py_VISIT(Py_TYPE(self));
+
+    // 1. Uniform Buffers
+    for (int i = 0; i < self->uniform_buffers.binding_count; ++i) {
+        Py_VISIT(self->uniform_buffers.binding[i].buffer);
+    }
+
+    // 2. Storage Buffers
+    for (int i = 0; i < self->storage_buffers.binding_count; ++i) {
+        Py_VISIT(self->storage_buffers.binding[i].buffer);
+    }
+
+    // 3. Samplers
+    for (int i = 0; i < self->samplers.binding_count; ++i) {
+        Py_VISIT(self->samplers.binding[i].sampler);
+        Py_VISIT(self->samplers.binding[i].image);
+    }
+
+    return 0;
+}
+
+static int DescriptorSet_clear(DescriptorSet *self) {
+    // 1. Uniform Buffers
+    for (int i = 0; i < self->uniform_buffers.binding_count; ++i) {
+        Py_CLEAR(self->uniform_buffers.binding[i].buffer);
+    }
+    self->uniform_buffers.binding_count = 0; // Defensive
+
+    // 2. Storage Buffers
+    for (int i = 0; i < self->storage_buffers.binding_count; ++i) {
+        Py_CLEAR(self->storage_buffers.binding[i].buffer);
+    }
+    self->storage_buffers.binding_count = 0; // Defensive
+
+    // 3. Samplers
+    for (int i = 0; i < self->samplers.binding_count; ++i) {
+        Py_CLEAR(self->samplers.binding[i].sampler);
+        Py_CLEAR(self->samplers.binding[i].image);
+    }
+    self->samplers.binding_count = 0; // Defensive
+
+    return 0;
+}
+
 static void DescriptorSet_dealloc(DescriptorSet *self) {
-  // Clean up potentially leaked references
-  for (int i = 0; i < self->uniform_buffers.binding_count; ++i) {
-    Py_XDECREF(self->uniform_buffers.binding[i].buffer);
-  }
-  for (int i = 0; i < self->storage_buffers.binding_count; ++i) {
-    Py_XDECREF(self->storage_buffers.binding[i].buffer);
-  }
-  for (int i = 0; i < self->samplers.binding_count; ++i) {
-    Py_XDECREF(self->samplers.binding[i].sampler);
-    Py_XDECREF(self->samplers.binding[i].image);
-  }
-  PyObject_Del(self);
+    // 1. Untrack from GC
+    if (PyObject_GC_IsTracked((PyObject *)self)) {
+        PyObject_GC_UnTrack(self);
+    }
+
+    // 2. Clear References
+    // (DescriptorSet_clear is safe to call here, or we can rely on the loop below)
+    DescriptorSet_clear(self);
+
+    // 3. Free memory
+    Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
 static void GlobalSettings_dealloc(GlobalSettings *self) { PyObject_Del(self); }
