@@ -887,6 +887,8 @@ typedef enum CommandType {
     CMD_BIND_DESCRIPTOR_SET = 3,
     CMD_DRAW                = 4,
     CMD_DRAW_INDIRECT       = 5,
+    CMD_DRAW_INDIRECT_COUNT = 6,
+    CMD_BIND_SET_DRAW       = 7,
 
     // --- Compute (10-14) ---
     CMD_BIND_COMPUTE        = 10,
@@ -898,6 +900,7 @@ typedef enum CommandType {
     CMD_GOTO                = 16,
     CMD_CALL                = 17,
     CMD_RET                 = 18,
+    CMD_JUMP_TABLE          = 19, // Replaces/Extends Control Flow
 
     // --- Memory Branching (20-24) ---
     CMD_SKIP_IF_ZERO        = 20,
@@ -917,6 +920,7 @@ typedef enum CommandType {
     CMD_STORE_REG_INDIRECT  = 31,
     CMD_SKIP_REG_ZERO       = 32,
     CMD_SKIP_REG_NOT_ZERO   = 33,
+    CMD_ASSERT_REG          = 34, 
 
     // --- Stack & Sync (35+) ---
     CMD_PUSH                = 35,
@@ -1094,6 +1098,39 @@ typedef struct CmdSetUniform {
     uint32_t type;      // 0=float, 1=int, 2=uint
 } CmdSetUniform;
 
+typedef struct CmdDrawIndirectCount {
+    CmdHeader header;
+    Buffer *buffer;         // The command data (Draw structs)
+    Buffer *count_buffer;   // The buffer containing the single uint32 count
+    int32_t offset;         // Offset in buffer
+    int32_t count_offset;   // Offset in count_buffer
+    int32_t max_draw_count; // Safety limit
+    int32_t stride;
+} CmdDrawIndirectCount;
+
+typedef struct CmdBindSetDraw {
+    CmdHeader header;
+    DescriptorSet *set;
+    int32_t vertex_count;
+    int32_t instance_count;
+    int32_t first;
+    int32_t _pad;
+} CmdBindSetDraw;
+
+typedef struct CmdJumpTable {
+    CmdHeader header;
+    uint32_t reg;      // The register holding the index
+    uint32_t count;    // Number of slots in the table
+    uint32_t targets[]; // Absolute offsets in bytecode
+} CmdJumpTable;
+
+typedef struct CmdAssertReg {
+    CmdHeader header;
+    uint32_t reg;      // Register to check
+    uint32_t value;    // Value to compare against
+    uint32_t op;       // 0:==, 1:!=, 2:<, 3:>, 4:<=, 5:>=
+} CmdAssertReg;
+
 typedef struct CommandBuffer {
     PyObject_HEAD
     Context *ctx;
@@ -1112,6 +1149,18 @@ typedef struct CommandBuffer {
     PyObject *fixups;   // List of tuples: (bytecode_offset_to_patch, "label_name")
     int recording;
 } CommandBuffer;
+
+typedef enum {
+    HGL_STATUS_OK               = 0,
+    HGL_STATUS_ERR_STACK_OVER   = 1,
+    HGL_STATUS_ERR_STACK_UNDER  = 2,
+    HGL_STATUS_ERR_INVALID_OP   = 3,
+    HGL_STATUS_ERR_SIGNAL       = 4, // Ctrl+C
+    HGL_STATUS_ERR_NESTED_LIMIT = 5,
+    HGL_STATUS_ERR_UNFINISHED   = 6,
+    HGL_STATUS_ERR_BUDGET       = 7,
+    HGL_STATUS_ERR_ASSERT       = 8
+} HGLStatus;
 
 // MISC defs
 
