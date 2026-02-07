@@ -734,6 +734,21 @@ static FORCE_INLINE void bind_descriptor_set(Context *self,
   }
 }
 
+static FORCE_INLINE void wait_for_last_work_internal(Context *ctx) {
+    if (ctx->last_work_fence) {
+        // Block the CPU until the GPU finishes all previously submitted work
+        glClientWaitSync(ctx->last_work_fence, GL_SYNC_FLUSH_COMMANDS_BIT, GL_TIMEOUT_IGNORED);
+        glDeleteSync(ctx->last_work_fence);
+        ctx->last_work_fence = NULL;
+    }
+}
+
+static FORCE_INLINE void wait_for_last_work(Context *self) {
+    PyMutex_Lock(&self->state_lock);
+    wait_for_last_work_internal(self);
+    PyMutex_Unlock(&self->state_lock);
+}
+
 // -----------------------------------------------------------------------------
 // Utilities & Type Conversions
 // -----------------------------------------------------------------------------
