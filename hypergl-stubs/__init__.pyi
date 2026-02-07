@@ -833,6 +833,13 @@ class CommandBuffer:
         """
         ...
 
+    def disassemble(self) -> List[str]:
+        """
+        Static analysis of the recorded buffer.
+        Decodes the raw binary data into a human-readable assembly format.
+        """
+        ...
+
 class Buffer:
     """
     Represents an OpenGL Buffer Object (VBO, IBO, UBO, SSBO).
