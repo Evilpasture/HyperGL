@@ -6122,20 +6122,24 @@ static PyObject *Context_meth_end_frame(Context *self, PyObject *args,
 }
 
 static PyObject *Context_meth_release(Context *self, PyObject *arg) {
-  // Uses enqueue_trash logic where applicable,
-  // or helper functions defined in the codebase.
-
   if (Py_TYPE(arg) == self->module_state->Buffer_type) {
     Buffer *buffer = (Buffer *)arg;
-    Py_XDECREF(buffer->memoryview);
-    buffer->memoryview = NULL;
+    
+    // Clear memoryview to break cycles immediately
+    if (buffer->memoryview) {
+        // We don't need to call .release() on the python object here 
+        // because Py_XDECREF will eventually trigger dealloc which handles it.
+        // However, explicitly severing the link is good.
+        Py_XDECREF(buffer->memoryview);
+        buffer->memoryview = NULL;
+    }
 
     if (!self->is_lost && buffer->buffer) {
-      // Direct delete requested by user, but safe to queue it
-      enqueue_trash(self->trash_shared, buffer->buffer, TRASH_BUFFER);
+      enqueue_trash(self->trash_shared, (uint64_t)buffer->buffer, TRASH_BUFFER);
       buffer->buffer = 0;
     }
-  } else if (Py_TYPE(arg) == self->module_state->Image_type) {
+  } 
+  else if (Py_TYPE(arg) == self->module_state->Image_type) {
     Image *image = (Image *)arg;
     if (image->faces) {
       PyDict_Clear(image->faces);
@@ -6143,54 +6147,84 @@ static PyObject *Context_meth_release(Context *self, PyObject *arg) {
 
     if (!self->is_lost && image->image) {
       int type = image->renderbuffer ? TRASH_RENDERBUFFER : TRASH_TEXTURE;
-      enqueue_trash(self->trash_shared, image->image, type);
+      enqueue_trash(self->trash_shared, (uint64_t)image->image, type);
       image->image = 0;
+      image->bindless_handle = 0; // Ensure handle is invalidated
     }
-  } else if (Py_TYPE(arg) == self->module_state->Pipeline_type) {
+  } 
+  else if (Py_TYPE(arg) == self->module_state->Pipeline_type) {
     Pipeline *pipeline = (Pipeline *)arg;
 
+    // Release and NULLIFY to prevent double-decrefs or stale access
     release_descriptor_set(self, pipeline->descriptor_set, 0);
+    pipeline->descriptor_set = NULL;
+
     release_global_settings(self, pipeline->global_settings, 0);
+    pipeline->global_settings = NULL;
 
     release_framebuffer(self, pipeline->framebuffer);
-    release_program(self, pipeline->program);
-    release_vertex_array(self, pipeline->vertex_array);
+    pipeline->framebuffer = NULL;
 
-    if (pipeline->uniforms) {
-      PyBuffer_Release(&pipeline->uniform_layout_buffer);
-      PyBuffer_Release(&pipeline->uniform_data_buffer);
-    }
-    PyBuffer_Release(&pipeline->viewport_data_buffer);
-    PyBuffer_Release(&pipeline->render_data_buffer);
-  } else if (Py_TYPE(arg) == self->module_state->Compute_type) {
+    release_program(self, pipeline->program);
+    pipeline->program = NULL;
+
+    release_vertex_array(self, pipeline->vertex_array);
+    pipeline->vertex_array = NULL;
+
+    // Safe buffer release (zeros the struct)
+    safe_release_buffer(&pipeline->uniform_layout_buffer);
+    safe_release_buffer(&pipeline->uniform_data_buffer);
+    safe_release_buffer(&pipeline->viewport_data_buffer);
+    safe_release_buffer(&pipeline->render_data_buffer);
+    
+    // Also release the python references holding the underlying memory
+    Py_CLEAR(pipeline->uniforms);
+    Py_CLEAR(pipeline->uniform_layout);
+    Py_CLEAR(pipeline->uniform_data);
+    Py_CLEAR(pipeline->viewport_data);
+    Py_CLEAR(pipeline->render_data);
+
+  } 
+  else if (Py_TYPE(arg) == self->module_state->Compute_type) {
     Compute *compute = (Compute *)arg;
+    
     release_descriptor_set(self, compute->descriptor_set, 0);
+    compute->descriptor_set = NULL;
+
     release_program(self, compute->program);
-    if (compute->uniforms) {
-      PyBuffer_Release(&compute->uniform_layout_buffer);
-      PyBuffer_Release(&compute->uniform_data_buffer);
-    }
-   } else if (Py_TYPE(arg) == self->module_state->Fence_type) {
+    compute->program = NULL;
+
+    safe_release_buffer(&compute->uniform_layout_buffer);
+    safe_release_buffer(&compute->uniform_data_buffer);
+
+    Py_CLEAR(compute->uniforms);
+    Py_CLEAR(compute->uniform_layout);
+    Py_CLEAR(compute->uniform_data);
+
+  } 
+  else if (Py_TYPE(arg) == self->module_state->Fence_type) {
         Fence *f = (Fence *)arg;
         if (!self->is_lost && f->sync) {
-            enqueue_trash(self->trash_shared, (int)(uint64_t)(uintptr_t)f->sync, TRASH_FENCE);
+            // FIX: Cast to uintptr_t then uint64_t to preserve 64-bit pointers
+            enqueue_trash(self->trash_shared, (uint64_t)(uintptr_t)f->sync, TRASH_FENCE);
             f->sync = NULL;
         }
-  } else if (PyUnicode_CheckExact(arg) &&
+  } 
+  else if (PyUnicode_CheckExact(arg) &&
              !PyUnicode_CompareWithASCIIString(arg, "shader_cache")) {
     PyObject *key;
     PyObject *value;
     Py_ssize_t pos = 0;
     while (PyDict_Next(self->shader_cache, &pos, &key, &value)) {
-      const GLObject *shader = (GLObject *)value;
-      // Shaders are GLObjects, so we must manually enqueue or trust their
-      // dealloc. Since we are clearing the cache, we own the ref.
+      GLObject *shader = (GLObject *)value;
       if (!self->is_lost) {
         glDeleteShader(shader->obj);
+        shader->obj = 0; // Prevent double delete
       }
     }
     PyDict_Clear(self->shader_cache);
-  } else if (PyUnicode_CheckExact(arg) &&
+  } 
+  else if (PyUnicode_CheckExact(arg) &&
              !PyUnicode_CompareWithASCIIString(arg, "all")) {
     PyGC_Collect();
   }
