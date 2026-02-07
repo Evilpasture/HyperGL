@@ -348,6 +348,10 @@ typedef struct SharedTrash {
     size_t count;
     size_t capacity;
     volatile long ref_count;
+
+    // Background cleanup support
+    unsigned long owner_thread_id; 
+    char *is_lost_ptr; // Points to Context->is_lost
 } SharedTrash;
 
 typedef struct GLObject
@@ -387,7 +391,7 @@ typedef struct DescriptorSetSamplers
 
 typedef struct DescriptorSet
 {
-    PyObject_HEAD int uses;
+    PyObject_HEAD volatile long uses;
     DescriptorSetBuffers uniform_buffers;
     DescriptorSetBuffers storage_buffers;
     DescriptorSetSamplers samplers;
@@ -405,7 +409,7 @@ typedef struct BlendState
 
 typedef struct GlobalSettings
 {
-    PyObject_HEAD int uses;
+    PyObject_HEAD volatile long uses;
     int attachments;
     int cull_face;
     int depth_enabled;
@@ -428,6 +432,13 @@ typedef struct GLStateShadow {
     int8_t seamless_cube;
     int8_t _pad; // keep alignment
 } GLStateShadow;
+
+typedef struct {
+    volatile long draw_calls;
+    volatile long pipeline_swaps;
+    volatile long set_swaps;
+    volatile long dispatch_calls;
+} ContextStats;
 
 typedef struct Context
 {
@@ -470,6 +481,10 @@ typedef struct Context
     void* hdc;   // The Device Context (Windows)
     void* hglrc; // The OpenGL Context (Windows)
     unsigned long thread_id; 
+    
+    ContextStats stats;
+
+    GLsync last_work_fence;
     
     GLStateShadow gl_state;
     Viewport current_viewport;
@@ -647,6 +662,7 @@ typedef struct {
 #define GL_LINEAR 0x2601
 #define GL_TEXTURE_MAG_FILTER 0x2800
 #define GL_TEXTURE_MIN_FILTER 0x2801
+#define GL_TEXTURE_MAX_LEVEL 0x813D
 #define GL_TEXTURE_WRAP_S 0x2802
 #define GL_TEXTURE_WRAP_T 0x2803
 #define GL_TEXTURE_WRAP_R 0x8072
@@ -739,6 +755,7 @@ typedef struct {
 #define GL_DRAW_INDIRECT_BUFFER 0x8F3F
 #define GL_PARAMETER_BUFFER_ARB 0x80EE 
 #define GL_COMMAND_BARRIER_BIT 0x00000040
+#define GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT 0x00004000
 
 #define GL_SYNC_GPU_COMMANDS_COMPLETE 0x9117
 #define GL_SYNC_FLUSH_COMMANDS_BIT    0x00000001
