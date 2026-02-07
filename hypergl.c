@@ -3322,6 +3322,30 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
   res->shader_cache = NULL;
   res->includes = NULL;
   res->framebuffer_cache = NULL;
+  res->info_dict = NULL;
+  res->default_framebuffer = NULL;
+  res->current_descriptor_set = NULL;
+  res->current_global_settings = NULL;
+
+  memset(&res->stats, 0, sizeof(ContextStats));
+
+  // Setting trackers to -1 ensures that the first call to any binding 
+  // function will actually communicate with the hardware.
+  memset(&res->gl_state, GL_STATE_UNKNOWN, sizeof(res->gl_state));
+
+    res->current_read_framebuffer = -1;
+  res->current_draw_framebuffer = -1;
+  res->current_program = -1;
+  res->current_vertex_array = -1;
+  res->current_depth_mask = -1; 
+  res->current_stencil_mask = -1;
+  res->current_viewport = (Viewport){-1, -1, -1, -1};
+  
+  // Initialize bitflags
+  res->is_lost = 0;
+  res->is_mask_default = 0;
+  res->is_stencil_default = 0;
+  res->is_blend_default = 0;
 
   // --- Shared Trash Allocation ---
   SharedTrash *shared = PyMem_Malloc(sizeof(SharedTrash));
@@ -3345,6 +3369,8 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
   shared->count = 0;
   shared->capacity = SHARED_TRASH_INITIAL_CAPACITY;
   shared->ref_count = 1; 
+  shared->owner_thread_id = res->thread_id;
+  shared->is_lost_ptr = &res->is_lost; 
   res->trash_shared = shared;
 
   // --- Initialize Caches ---
