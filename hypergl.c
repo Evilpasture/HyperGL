@@ -7497,6 +7497,18 @@ static PyObject *CommandBuffer_meth_goto(CommandBuffer *self, PyObject *arg) {
     Py_RETURN_NONE;
 }
 
+static int hgl_is_jump_target(CommandBuffer *self, size_t offset) {
+    Py_ssize_t pos = 0;
+    PyObject *key, *val;
+    // Iterate through the labels dictionary to see if any label points to this offset
+    while (PyDict_Next(self->labels, &pos, &key, &val)) {
+        if ((size_t)PyLong_AsSize_t(val) == offset) {
+            return 1; // Found a label pointing here; it's a jump target
+        }
+    }
+    return 0; // No labels point here
+}
+
 static void CommandBuffer_optimize(CommandBuffer *self) {
     if (self->size == 0) return;
 
