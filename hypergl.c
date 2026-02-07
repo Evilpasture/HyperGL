@@ -3985,97 +3985,107 @@ static PyObject *Buffer_meth_write(const Buffer *self, PyObject *args,
   Py_RETURN_NONE;
 }
 
-static PyObject *Buffer_meth_read(Buffer *self, PyObject *args,
-                                  PyObject *kwargs) {
+static PyObject *Buffer_meth_read(Buffer *self, PyObject *args, PyObject *kwargs) {
   static char *keywords[] = {"size", "offset", "into", NULL};
-
   PyObject *size_arg = Py_None;
   int offset = 0;
   PyObject *into = Py_None;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|OiO", keywords, &size_arg,
-                                   &offset, &into)) {
-    return NULL;
-  }
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|OiO", keywords, &size_arg, &offset, &into)) 
+      return NULL;
 
   if (self->ctx->is_lost) {
     PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
     return NULL;
   }
 
+  // 1. Validation (Outside Lock)
   if (offset < 0 || offset > self->size) {
     PyErr_Format(PyExc_ValueError, "[HyperGL] invalid offset");
     return NULL;
   }
-
-  if (size_arg != Py_None && !PyLong_CheckExact(size_arg)) {
-    PyErr_Format(PyExc_TypeError, "[HyperGL] the size must be an int");
-    return NULL;
-  }
-
   int size = self->size - offset;
   if (size_arg != Py_None) {
     size = to_int(size_arg);
-    if (size < 0) {
-      PyErr_Format(PyExc_ValueError, "[HyperGL] invalid size");
-      return NULL;
-    }
   }
-
   if (size < 0 || size + offset > self->size) {
     PyErr_Format(PyExc_ValueError, "[HyperGL] invalid size");
     return NULL;
   }
 
-  if (self->target == GL_ELEMENT_ARRAY_BUFFER) {
-    bind_vertex_array(self->ctx, 0);
+  // 2. Pre-allocation/Preparation (Outside Lock)
+  // We handle Python logic here so we don't hold the lock during GC-risky calls.
+  PyObject *res_bytes = NULL;
+  if (into == Py_None) {
+      res_bytes = PyBytes_FromStringAndSize(NULL, size);
+      if (!res_bytes) return NULL;
   }
 
+  // Handle Buffer/BufferView cases by preparing the chunk before locking
+  if (Py_TYPE(into) == self->ctx->module_state->Buffer_type || 
+      Py_TYPE(into) == self->ctx->module_state->BufferView_type) {
+      PyObject *chunk = PyObject_CallMethod((PyObject *)self, "view", "(ii)", size, offset);
+      if (!chunk) { Py_XDECREF(res_bytes); return NULL; }
+      PyObject *ret = PyObject_CallMethod(into, "write", "(N)", chunk);
+      // No lock needed for this path because 'write' and 'view' handle their own locking.
+      Py_XDECREF(res_bytes);
+      return ret;
+  }
+
+  // 3. Hardware Phase (Inside Lock)
+  PyMutex_Lock(&self->ctx->state_lock);
+  wait_for_last_work_internal(self->ctx);
+
+  // Unbind VAO/Descriptor if they use this buffer
+  if (self->target == GL_ELEMENT_ARRAY_BUFFER) {
+    bind_vertex_array_internal(self->ctx, 0);
+  }
+  
+  // NOTE: We don't use Py_XSETREF here. We manually swap and decref 
+  // AFTER unlocking to avoid dealloc-deadlocks.
+  DescriptorSet *stale_set = NULL;
   if (self->target == GL_UNIFORM_BUFFER) {
+    stale_set = self->ctx->current_descriptor_set;
     self->ctx->current_descriptor_set = NULL;
   }
 
   glBindBuffer(self->target, self->buffer);
 
-  if (into == Py_None) {
-    PyObject *res = PyBytes_FromStringAndSize(NULL, size);
-    glGetBufferSubData(self->target, offset, size, PyBytes_AsString(res));
-    return res;
+  if (res_bytes) {
+      // Transfer to newly created bytes
+      Py_BEGIN_ALLOW_THREADS
+      glGetBufferSubData(self->target, offset, size, PyBytes_AsString(res_bytes));
+      Py_END_ALLOW_THREADS
+      PyMutex_Unlock(&self->ctx->state_lock);
+      Py_XDECREF(stale_set); // Safe cleanup outside lock
+      return res_bytes;
   }
 
-  if (Py_TYPE(into) == self->ctx->module_state->Buffer_type) {
-    PyObject *chunk =
-        PyObject_CallMethod((PyObject *)self, "view", "(ii)", size, offset);
-    return PyObject_CallMethod(into, "write", "(N)", chunk);
-  }
-
-  if (Py_TYPE(into) == self->ctx->module_state->BufferView_type) {
-    BufferView *buffer_view = (BufferView *)into;
-    if (size > buffer_view->size) {
-      PyErr_Format(PyExc_ValueError, "[HyperGL] invalid size");
-      return NULL;
-    }
-    PyObject *chunk =
-        PyObject_CallMethod((PyObject *)self, "view", "(ii)", size, offset);
-    return PyObject_CallMethod((PyObject *)buffer_view->buffer, "write", "(Ni)",
-                               chunk, buffer_view->offset);
-  }
-
+  // Transfer to existing user buffer
   Py_buffer view;
-  if (PyObject_GetBuffer(into, &view, PyBUF_WRITABLE)) {
-    return NULL;
+  if (PyObject_GetBuffer(into, &view, PyBUF_WRITABLE) < 0) {
+      PyMutex_Unlock(&self->ctx->state_lock);
+      Py_XDECREF(stale_set);
+      return NULL;
   }
 
   if (size > (int)view.len) {
-    PyErr_Format(PyExc_ValueError, "[HyperGL] invalid size");
-    return NULL;
+      PyBuffer_Release(&view);
+      PyMutex_Unlock(&self->ctx->state_lock);
+      Py_XDECREF(stale_set);
+      PyErr_Format(PyExc_ValueError, "[HyperGL] into buffer too small");
+      return NULL;
   }
 
-  Py_BEGIN_ALLOW_THREADS glBindBuffer(self->target, self->buffer);
+  Py_BEGIN_ALLOW_THREADS 
   glGetBufferSubData(self->target, offset, size, view.buf);
   Py_END_ALLOW_THREADS
 
-      PyBuffer_Release(&view);
+  PyBuffer_Release(&view);
+  PyMutex_Unlock(&self->ctx->state_lock);
+
+  // 4. Final Cleanup
+  Py_XDECREF(stale_set);
   Py_RETURN_NONE;
 }
 
