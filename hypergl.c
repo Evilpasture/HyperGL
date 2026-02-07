@@ -6411,6 +6411,26 @@ static PyObject *meth_inspect(PyObject *self, PyObject *arg) {
                          pipeline->vertex_array->obj, "program",
                          pipeline->program->obj);
   }
+  if (Py_TYPE(arg) == module_state->Compute_type) {
+    Compute *compute = (Compute *)arg;
+    if (!compute->program) {
+      return Py_BuildValue("{ss}", "type", "compute (uninitialized)");
+    }
+
+    PyObject *resources = inspect_descriptor_set(compute->descriptor_set);
+    if (!resources) {
+      return NULL;
+    }
+
+    PyObject *interface_obj =
+        compute->program->extra ? compute->program->extra : Py_None;
+
+    return Py_BuildValue("{sssOsNsi}", 
+                         "type", "compute", 
+                         "interface", interface_obj, 
+                         "resources", resources, 
+                         "program", compute->program->obj);
+  }
   Py_RETURN_NONE;
 }
 
