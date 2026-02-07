@@ -6343,7 +6343,67 @@ static PyObject *Context_meth_release(Context *self, PyObject *arg) {
              !PyUnicode_CompareWithASCIIString(arg, "all")) {
     PyGC_Collect();
   }
+  
   Py_RETURN_NONE;
+}
+
+static PyObject *Context_get_stats(Context *self, void *closure) {
+    return Py_BuildValue("{s:l,s:l,s:l,s:l}",
+        "draw_calls",     Atomic_Load(&self->stats.draw_calls),
+        "pipeline_swaps", Atomic_Load(&self->stats.pipeline_swaps),
+        "set_swaps",      Atomic_Load(&self->stats.set_swaps),
+        "dispatch_calls", Atomic_Load(&self->stats.dispatch_calls)
+    );
+}
+
+static PyObject *Context_meth_reset_stats(Context *self, PyObject *Py_UNUSED(ignored)) {
+    // We don't have an Atomic_Store macro, but standard assignment to 
+    // volatile long is safe for zeroing on modern x64/ARM.
+    self->stats.draw_calls = 0;
+    self->stats.pipeline_swaps = 0;
+    self->stats.set_swaps = 0;
+    self->stats.dispatch_calls = 0;
+    Py_RETURN_NONE;
+}
+
+static PyObject *Context_meth_invalidate_state(Context *self, PyObject *Py_UNUSED(ignored)) {
+    PyMutex_Lock(&self->state_lock);
+    
+    // Set all shadow state to UNKNOWN
+    memset(&self->gl_state, GL_STATE_UNKNOWN, sizeof(self->gl_state));
+    
+    // Reset all cached IDs
+    self->current_read_framebuffer = -1;
+    self->current_draw_framebuffer = -1;
+    self->current_program = -1;
+    self->current_vertex_array = -1;
+    self->current_depth_mask = -1; 
+    self->current_stencil_mask = -1;
+    self->current_viewport = (Viewport){-1, -1, -1, -1};
+    
+    // Reset high-level objects
+    Py_CLEAR(self->current_descriptor_set);
+    Py_CLEAR(self->current_global_settings);
+    
+    PyMutex_Unlock(&self->state_lock);
+    Py_RETURN_NONE;
+}
+
+static PyObject *Context_meth_finish(Context *self, PyObject *Py_UNUSED(ignored)) {
+    if (self->is_lost) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] the context is lost");
+        return NULL;
+    }
+
+    // Since glFinish() blocks the CPU, we release the GIL briefly 
+    // while holding the hardware state lock.
+    Py_BEGIN_ALLOW_THREADS
+    PyMutex_Lock(&self->state_lock);
+    glFinish();
+    PyMutex_Unlock(&self->state_lock);
+    Py_END_ALLOW_THREADS
+
+    Py_RETURN_NONE;
 }
 
 static PyObject *Context_get_screen(const Context *self, void *closure) {
