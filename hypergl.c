@@ -6587,9 +6587,16 @@ static Fence *Context_meth_fence(Context *self, PyObject *args) {
     return res;
 }
 
-static PyObject *Context_meth_command_buffer(Context *self, PyObject *args) {
+static PyObject *Context_meth_command_buffer(Context *self, PyObject *args, PyObject *kwargs) {
+    static char *keywords[] = {"name", NULL};
+    const char *name = "unnamed_command_buffer";
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|z", keywords, &name)) return NULL;
+  
     CommandBuffer *cmd = PyObject_GC_New(CommandBuffer, self->module_state->CommandBuffer_type);
     if (!cmd) return NULL;
+
+    snprintf(cmd->name, sizeof(cmd->name), "%s", name);
 
     cmd->ctx = (Context *)Py_NewRef(self);
     cmd->size = 0;
