@@ -596,6 +596,7 @@ def resource_bindings(resources):
 
 def framebuffer_attachments(attachments):
     if attachments is None:
+        # Returning None tells the C code to use the default_framebuffer (ID 0)
         return None
     attachments = [x.face() if hasattr(x, 'face') else x for x in attachments]
     size = attachments[0].size
@@ -966,6 +967,68 @@ class SceneCompiler:
         # Pop in reverse order!
         for r in reversed(registers):
             self.cb.pop(r)
+    @contextlib.contextmanager
+    def while_not_zero(self, buffer, offset: int):
+        """
+        Bytecode Construct: WHILE (Memory-based)
+        Repeats the block as long as the uint32 at buffer+offset != 0.
+        """
+        start_label = self._get_unique_label("while_start")
+        end_label = self._get_unique_label("while_end")
+
+        self.cb.label(start_label)
+        # If NOT zero, we skip the 'goto exit' and run the body
+        self.cb.skip_if_not_zero(buffer, offset) 
+        self.cb.goto(end_label)
+
+        yield
+
+        # Loop back to check condition again
+        self.cb.goto(start_label)
+        self.cb.label(end_label)
+
+    @contextlib.contextmanager
+    def while_reg_not_zero(self, reg: int):
+        """
+        Bytecode Construct: WHILE (Register-based)
+        Repeats the block as long as i[reg] != 0.
+        """
+        start_label = self._get_unique_label("while_reg_start")
+        end_label = self._get_unique_label("while_reg_end")
+
+        self.cb.label(start_label)
+        # If register is NOT zero, we stay in the loop
+        self.cb.skip_reg_not_zero(reg)
+        self.cb.goto(end_label)
+
+        yield
+
+        self.cb.goto(start_label)
+        self.cb.label(end_label)
+
+    @contextlib.contextmanager
+    def switch(self, reg: int, cases: int):
+        """
+        Bytecode Construct: SWITCH/CASE
+        Args:
+            reg: The register to switch on.
+            cases: The number of cases (0 to N-1).
+        """
+        exit_label = self._get_unique_label("switch_exit")
+        case_labels = [self._get_unique_label(f"case_{i}") for i in range(cases)]
+        
+        # Emit the table
+        self.cb.jump_table(reg, case_labels)
+        
+        # We also need a goto exit in case the index is OOB (fallthrough)
+        self.cb.goto(exit_label)
+
+        # Container for the user to define cases
+        yield case_labels
+        
+        # Ensure all cases jump to exit
+        self.cb.goto(exit_label)
+        self.cb.label(exit_label)
 
 def subroutine(func):
     """
