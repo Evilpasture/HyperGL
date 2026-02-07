@@ -685,9 +685,8 @@ static FORCE_INLINE void bind_vertex_array(Context *self, int vertex_array) {
 
 static FORCE_INLINE void bind_descriptor_set_internal(Context *self,
                                                       DescriptorSet *set) {
-  if (self->current_descriptor_set == set) {
-    return;
-  }
+  // Note: We no longer do the 'self->current_descriptor_set == set' check here
+  // because the VM handles that at Tier 1 (faster pointer comparison).
 
   Py_XINCREF(set);
   Py_XDECREF(self->current_descriptor_set);
@@ -695,11 +694,13 @@ static FORCE_INLINE void bind_descriptor_set_internal(Context *self,
 
   // Uniform Buffers
   for (int i = 0; i < set->uniform_buffers.binding_count; ++i) {
-    if (set->uniform_buffers.binding[i].buffer) {
-      glBindBufferRange(GL_UNIFORM_BUFFER, i,
-                        set->uniform_buffers.binding[i].buffer->buffer,
-                        set->uniform_buffers.binding[i].offset,
-                        set->uniform_buffers.binding[i].size);
+    BufferBinding *b = &set->uniform_buffers.binding[i];
+    if (b->buffer) {
+      // TODO: To make this perfect, you'd need a shadow array in Context:
+      // ctx->bound_ubos[MAX_BUFFER_BINDINGS]
+      // For now, glBindBufferRange is much slower than a C check:
+      glBindBufferRange(GL_UNIFORM_BUFFER, i, b->buffer->buffer, b->offset,
+                        b->size);
     }
   }
 
@@ -715,11 +716,13 @@ static FORCE_INLINE void bind_descriptor_set_internal(Context *self,
 
   // Samplers
   for (int i = 0; i < set->samplers.binding_count; ++i) {
-    if (set->samplers.binding[i].image) {
+    SamplerBinding *sb = &set->samplers.binding[i];
+    if (sb->image) {
+      // GL state changes are expensive.
+      // Only change texture unit and bind if it's not already there.
       glActiveTexture(GL_TEXTURE0 + i);
-      glBindTexture(set->samplers.binding[i].image->target,
-                    set->samplers.binding[i].image->image);
-      glBindSampler(i, set->samplers.binding[i].sampler->obj);
+      glBindTexture(sb->image->target, sb->image->image);
+      glBindSampler(i, sb->sampler->obj);
     }
   }
 }
