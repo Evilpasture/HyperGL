@@ -2855,6 +2855,46 @@ static void safe_decref_list(Context *self, PyObject **list, int count,
   }
 }
 
+static void internal_safe_flush(SharedTrash *shared) {
+    // Only flush if the context isn't lost
+    if (*shared->is_lost_ptr) return;
+
+    TrashItem *to_delete = NULL;
+    size_t count = 0;
+
+    PyMutex_Lock(&shared->lock);
+    if (shared->count > 0) {
+        count = shared->count;
+        to_delete = shared->bin;
+        
+        // Reset the bin
+        shared->bin = PyMem_Malloc(shared->capacity * sizeof(TrashItem));
+        shared->count = 0;
+    }
+    PyMutex_Unlock(&shared->lock);
+
+    if (!to_delete) return;
+
+    // Physically delete the resources
+    for (size_t i = 0; i < count; i++) {
+        unsigned int id = (unsigned int)to_delete[i].id;
+        switch (to_delete[i].type) {
+            case TRASH_BUFFER:      glDeleteBuffers(1, &id); break;
+            case TRASH_TEXTURE:     glDeleteTextures(1, &id); break;
+            case TRASH_RENDERBUFFER: glDeleteRenderbuffers(1, &id); break;
+            case TRASH_FRAMEBUFFER:  glDeleteFramebuffers(1, &id); break;
+            case TRASH_VERTEX_ARRAY: glDeleteVertexArrays(1, &id); break;
+            case TRASH_PROGRAM:      glDeleteProgram(id); break;
+            case TRASH_SHADER:       glDeleteShader(id); break;
+            case TRASH_SAMPLER:      glDeleteSamplers(1, &id); break;
+            case TRASH_QUERY:        glDeleteQueries(1, &id); break;
+            case TRASH_FENCE:        glDeleteSync((GLsync)(uintptr_t)to_delete[i].id); break;
+            default: continue;
+        }
+    }
+    PyMem_Free(to_delete);
+}
+
 // Flush Trash using SharedTrash (Thread-Safe)
 void flush_trash(const Context *self) {
   SharedTrash *shared = self->trash_shared;
@@ -2942,32 +2982,40 @@ void flush_trash(const Context *self) {
       PyMem_Free(to_delete);
 }
 
-static void enqueue_trash(SharedTrash *trash, int id, int type) {
-  if (!trash || id <= 0) { // assumes all GL objects are unsigned
-    return;
-  }
+static void enqueue_trash(SharedTrash *trash, uint64_t id, int type) {
+    if (!trash || id <= 0) return;
 
-  PyMutex_Lock(&trash->lock);
+    int should_auto_flush = 0;
+    PyMutex_Lock(&trash->lock);
 
-  if (trash->count >= trash->capacity) {
-    size_t old_cap = trash->capacity;
-    size_t new_cap = old_cap ? old_cap * 2 : 64;
-
-    TrashItem *new_bin = PyMem_Realloc(trash->bin, new_cap * sizeof(TrashItem));
-
-    if (!new_bin) {
-      // Allocation failed → drop item (lossy but safe)
-      PyMutex_Unlock(&trash->lock);
-      return;
+    // 1. Check for Pressure (Limit: 5000 items)
+    if (trash->count > 5000) {
+        // If we are on the owner thread, we can safely clean up right now
+        if (PyThread_get_thread_ident() == trash->owner_thread_id) {
+            should_auto_flush = 1;
+        }
     }
 
-    trash->bin = new_bin;
-    trash->capacity = new_cap;
-  }
+    // 2. Standard Growth Logic
+    if (trash->count >= trash->capacity) {
+        size_t new_cap = trash->capacity * 2;
+        TrashItem *new_bin = PyMem_Realloc(trash->bin, new_cap * sizeof(TrashItem));
+        if (new_bin) {
+            trash->bin = new_bin;
+            trash->capacity = new_cap;
+        }
+    }
 
-  trash->bin[trash->count++] = (TrashItem){id, type};
+    if (trash->count < trash->capacity) {
+        trash->bin[trash->count++] = (TrashItem){id, type};
+    }
 
-  PyMutex_Unlock(&trash->lock);
+    PyMutex_Unlock(&trash->lock);
+
+    // 3. Auto-Flush (Pressure Relief)
+    if (should_auto_flush) {
+        internal_safe_flush(trash);
+    }
 }
 
 static void release_descriptor_set(Context *self, DescriptorSet *set,
