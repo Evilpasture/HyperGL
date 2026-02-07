@@ -7974,6 +7974,10 @@ static PyObject *CommandBuffer_meth_alu(CommandBuffer *self, PyObject *args, PyO
         else if (strcmp(s, "lsh") == 0) op_code = 7;
         else if (strcmp(s, "rsh") == 0) op_code = 8;
         else if (strcmp(s, "not") == 0) op_code = 9;
+        else if (strcmp(s, "fadd") == 0) op_code = 10;
+        else if (strcmp(s, "fsub") == 0) op_code = 11;
+        else if (strcmp(s, "fmul") == 0) op_code = 12;
+        else if (strcmp(s, "fdiv") == 0) op_code = 13;
         else return PyErr_Format(PyExc_ValueError, "Unknown ALU op: %s", s);
     } else {
         op_code = (uint32_t)PyLong_AsUnsignedLong(op_obj);
@@ -8608,8 +8612,8 @@ static PyObject *CommandBuffer_meth_assert_reg(CommandBuffer *self, PyObject *ar
 }
 
 static const char* hgl_get_alu_op(uint32_t op) {
-    const char* ops[] = {"add", "sub", "mul", "div", "and", "or", "xor", "lsh", "rsh", "not"};
-    return (op < 10) ? ops[op] : "???";
+    const char* ops[] = {"add", "sub", "mul", "div", "and", "or", "xor", "lsh", "rsh", "not", "fadd", "fsub", "fmul", "fdiv"};
+    return (op < 14) ? ops[op] : "???";
 }
 
 static const char* hgl_get_assert_op(uint32_t op) {
@@ -9345,6 +9349,7 @@ static int CommandBuffer_execute_internal(CommandBuffer *self, int depth,
       CmdAlu *c = (CmdAlu *)ptr;
       uint32_t a = c->reg_a & 7;
       uint32_t b = c->reg_b & 7;
+      float fa, fb; 
       switch (c->op) {
       case 0:
         regs[a] += regs[b];
@@ -9377,6 +9382,26 @@ static int CommandBuffer_execute_internal(CommandBuffer *self, int depth,
       case 9:
         regs[a] = ~regs[a];
         break; // NOT (NEW - Unary on reg_a)
+      case 10: // FADD
+          memcpy(&fa, &regs[a], 4); memcpy(&fb, &regs[b], 4);
+          fa += fb;
+          memcpy(&regs[a], &fa, 4);
+          break;
+      case 11: // FSUB
+          memcpy(&fa, &regs[a], 4); memcpy(&fb, &regs[b], 4);
+          fa -= fb;
+          memcpy(&regs[a], &fa, 4);
+          break;
+      case 12: // FMUL
+          memcpy(&fa, &regs[a], 4); memcpy(&fb, &regs[b], 4);
+          fa *= fb;
+          memcpy(&regs[a], &fa, 4);
+          break;
+      case 13: // FDIV
+          memcpy(&fa, &regs[a], 4); memcpy(&fb, &regs[b], 4);
+          if (fb != 0.0f) fa /= fb; // Simple safety check
+          memcpy(&regs[a], &fa, 4);
+          break;
       default:
         break;
       }
