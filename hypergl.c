@@ -144,6 +144,8 @@ RESOLVE(void, glUniformMatrix2x4fv, int, int, int, const void *);
 RESOLVE(void, glUniformMatrix4x2fv, int, int, int, const void *);
 RESOLVE(void, glUniformMatrix3x4fv, int, int, int, const void *);
 RESOLVE(void, glUniformMatrix4x3fv, int, int, int, const void *);
+RESOLVE(void, glUniform1f, int, float);
+RESOLVE(void, glUniform1ui, int, unsigned int);
 
 // -- Framebuffers --
 RESOLVE(void, glBindRenderbuffer, int, int);
@@ -168,6 +170,8 @@ RESOLVE(void, glDrawArraysInstanced, int, int, int, int);
 RESOLVE(void, glDrawElementsInstanced, int, int, int, intptr, int);
 RESOLVE(void, glMultiDrawArraysIndirect, int, const void *, int, int);
 RESOLVE(void, glMultiDrawElementsIndirect, int, int, const void *, int, int);
+RESOLVE(void, glMultiDrawArraysIndirectCount, int, const void *, intptr, int, int);
+RESOLVE(void, glMultiDrawElementsIndirectCount, int, int, const void *, intptr, int, int);
 
 // -- Queries & Extensions --
 RESOLVE(void, glDeleteQueries, int, const unsigned int *);
@@ -180,6 +184,7 @@ RESOLVE(GLsync, glFenceSync, GLenum, GLbitfield);
 RESOLVE(void, glDeleteSync, GLsync);
 RESOLVE(GLenum, glClientWaitSync, GLsync, GLbitfield, GLuint64);
 RESOLVE(void, glWaitSync, GLsync, GLbitfield, GLuint64);
+RESOLVE(void, glFinish);
 
 // -----------------------------------------------------------------------------
 // OpenGL Loader Logic
@@ -302,6 +307,8 @@ static int load_gl(PyObject *loader) {
   load(glUniformMatrix2fv);
   load(glUniformMatrix3fv);
   load(glUniformMatrix4fv);
+  load(glUniform1f);
+  load(glUniform1ui);
   load(glVertexAttribPointer);
   load(glUniformMatrix2x3fv);
   load(glUniformMatrix3x2fv);
@@ -362,6 +369,7 @@ static int load_gl(PyObject *loader) {
   load(glDeleteSync);
   load(glClientWaitSync);
   load(glWaitSync);
+  load(glFinish);
 
 #define load_optional(name)                                                    \
   do {                                                                         \
@@ -377,6 +385,8 @@ static int load_gl(PyObject *loader) {
   load_optional(glMakeTextureHandleNonResidentARB);
   load_optional(glMultiDrawArraysIndirect);
   load_optional(glMultiDrawElementsIndirect);
+  load_optional(glMultiDrawArraysIndirectCount);
+  load_optional(glMultiDrawElementsIndirectCount);
 
 #undef load
 #undef load_optional
