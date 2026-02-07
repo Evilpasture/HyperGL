@@ -433,6 +433,15 @@ static FORCE_INLINE void zeromem(void *NO_ALIAS data, int size) {
   memset(data, 0, size);
 }
 
+static FORCE_INLINE void safe_release_buffer(Py_buffer *view) {
+    // Only release if the buffer is actually holding an export (obj != NULL)
+    if (view->obj) {
+        PyBuffer_Release(view);
+        // CRITICAL: Zero the struct so dealloc doesn't double-free
+        memset(view, 0, sizeof(Py_buffer)); 
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Uniform Binding Helpers & Dispatch Table
 // -----------------------------------------------------------------------------
@@ -4877,15 +4886,15 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
       "render_data",   "includes",        NULL,
   };
 
-  PyObject *vertex_shader = NULL;
-  PyObject *fragment_shader = NULL;
+  PyObject *vertex_shader = Py_None;
+  PyObject *fragment_shader = Py_None;
   PyObject *layout = self->module_state->empty_tuple;
   PyObject *resources = self->module_state->empty_tuple;
   PyObject *arg_uniforms = Py_None;
   PyObject *depth = Py_None;
   PyObject *stencil = Py_None;
   PyObject *blend = Py_None;
-  PyObject *framebuffer_arg = NULL;
+  PyObject *framebuffer_arg = Py_None;
   PyObject *vertex_buffers = self->module_state->empty_tuple;
   PyObject *index_buffer = Py_None;
   int short_index = 0;
@@ -4942,23 +4951,30 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
   }
 
   if (!PyArg_ParseTupleAndKeywords(
-          args, create_kwargs, "|$O!O!OOOOOOOOOpOOiiiOOOOO", keywords,
-          &PyUnicode_Type, &vertex_shader, &PyUnicode_Type, &fragment_shader,
-          &layout, &resources, &arg_uniforms, &depth, &stencil, &blend,
-          &framebuffer_arg, &vertex_buffers, &index_buffer, &short_index,
-          &cull_face, &topology_arg, &vertex_count, &instance_count,
-          &first_vertex, &viewport, &arg_uniform_data, &viewport_data,
-          &render_data, &includes)) {
-    goto fail;
+        args, create_kwargs, "|$OOOOOOOOOOOpOOiiiOOOOO", keywords,
+        &vertex_shader, &fragment_shader, 
+        &layout, &resources, &arg_uniforms, &depth, &stencil, &blend,
+        &framebuffer_arg, &vertex_buffers, &index_buffer, 
+        &short_index,    // matches 'p'
+        &cull_face,      // matches 'O'
+        &topology_arg,   // matches 'O'
+        &vertex_count,   // matches 'i'
+        &instance_count, // matches 'i'
+        &first_vertex,   // matches 'i'
+        &viewport, &arg_uniform_data, &viewport_data,
+        &render_data, &includes)) {
+      goto fail;
   }
 
   if (self->is_lost) {
     PyErr_SetString(PyExc_RuntimeError, "[HyperGL] context lost");
     goto fail;
   }
-  if (!vertex_shader || !fragment_shader || !framebuffer_arg) {
-    PyErr_SetString(PyExc_TypeError, "[HyperGL] missing required args");
-    goto fail;
+
+  if (!template && (vertex_shader == Py_None || fragment_shader == Py_None)) {
+      PyErr_SetString(PyExc_TypeError, 
+          "[HyperGL] vertex_shader and fragment_shader are required unless a template is provided.");
+      goto fail;
   }
 
   Viewport viewport_value;
@@ -5075,10 +5091,18 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
     goto fail;
   }
 
-  if (framebuffer_attachments != Py_None && viewport == Py_None) {
-    PyObject *size = PyTuple_GetItem(framebuffer_attachments, 0);
-    viewport_value.width = to_int(PyTuple_GetItem(size, 0));
-    viewport_value.height = to_int(PyTuple_GetItem(size, 1));
+  if (viewport == Py_None) {
+    if (framebuffer_attachments != Py_None) {
+      // Texture mode: Match texture size
+      PyObject *size = PyTuple_GetItem(framebuffer_attachments, 0);
+      viewport_value.width = to_int(PyTuple_GetItem(size, 0));
+      viewport_value.height = to_int(PyTuple_GetItem(size, 1));
+    } else {
+      // Screen mode: Match current window size
+      // We can use 0,0,width,height from your internal tracking or just
+      // leave it to be set by the first render.
+      // Suggestion: Default to a sentinel or a known size.
+    }
   }
 
   // All GLObject builders must internally acquire ctx->state_lock
@@ -5128,8 +5152,11 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
     goto fail;
   }
 
-  // Init pointers to NULL
-  res->ctx = NULL;
+  memset((char *)res + sizeof(PyObject), 0, sizeof(Pipeline) - sizeof(PyObject));
+
+  // CRITICAL: Initialize ALL fields to NULL/Zero immediately.
+  // This makes the deallocator and the fail: block safe.
+  res->ctx = (Context *)Py_NewRef(self);
   res->create_kwargs = NULL;
   res->framebuffer = NULL;
   res->vertex_array = NULL;
@@ -5213,7 +5240,6 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
 
     res->viewport_data = PyMemoryView_FromBuffer(&view);
     if (!res->viewport_data) {
-      Py_DECREF(res);
       goto fail;
     }
   } else {
@@ -5236,7 +5262,6 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
 
     res->render_data = PyMemoryView_FromBuffer(&view);
     if (!res->render_data) {
-      Py_DECREF(res);
       goto fail;
     }
   } else {
@@ -5272,24 +5297,19 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
   Py_XDECREF(vertex_array_bindings);
   Py_XDECREF(resource_bindings);
   Py_XDECREF(settings);
+  Py_XDECREF(create_kwargs);
 
   return res;
 
 fail:
-  if (res && res->viewport_data_buffer.obj) {
-    PyBuffer_Release(&res->viewport_data_buffer);
-  }
-
-  if (res && res->render_data_buffer.obj) {
-    PyBuffer_Release(&res->render_data_buffer);
-  }
-
-  if (res && res->uniform_layout_buffer.obj) {
-    PyBuffer_Release(&res->uniform_layout_buffer);
-  }
-
-  if (res && res->uniform_data_buffer.obj) {
-    PyBuffer_Release(&res->uniform_data_buffer);
+  if (res) {
+    // Use the safety helper to release AND nullify
+    safe_release_buffer(&res->viewport_data_buffer);
+    safe_release_buffer(&res->render_data_buffer);
+    safe_release_buffer(&res->uniform_layout_buffer);
+    safe_release_buffer(&res->uniform_data_buffer);
+    
+    Py_DECREF(res);
   }
 
   Py_XDECREF(create_kwargs);
@@ -5318,9 +5338,6 @@ fail:
   Py_XDECREF(resource_bindings);
   Py_XDECREF(settings);
 
-  if (res) {
-    Py_DECREF(res);
-  }
   return NULL;
 }
 
