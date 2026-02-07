@@ -5,12 +5,13 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <time.h>
 
 #define HGL_MAGIC 0x424C4748  // "HGLB" (HyperGL Binary) in Little Endian
 
 // Current VM Specification version
-#define HGL_ISA_MAJOR 1
-#define HGL_ISA_MINOR 1
+#define HGL_ISA_MAJOR 2
+#define HGL_ISA_MINOR 0
 
 typedef struct HGLHeader {
     uint32_t magic;    // Must be HGL_MAGIC
@@ -465,6 +466,8 @@ typedef struct Context
     int current_depth_mask;
     int current_stencil_mask;
     int default_texture_unit;
+
+    uint32_t vm_seed; // The random state for the VM
     
     // UPDATED: 'char' to match Py_T_BOOL expectations
     char is_lost; 
@@ -879,61 +882,61 @@ typedef enum ImageFormatTupleIndex {
 // --- Command Buffer Definitions ---
 
 typedef enum CommandType {
-    CMD_NOP                 = 0,
+    CMD_NOP                 = 0x00,
     
-    // --- Graphics (1-9) ---
-    CMD_CLEAR               = 1,
-    CMD_BIND_PIPELINE       = 2,
-    CMD_BIND_DESCRIPTOR_SET = 3,
-    CMD_DRAW                = 4,
-    CMD_DRAW_INDIRECT       = 5,
-    CMD_DRAW_INDIRECT_COUNT = 6,
-    CMD_BIND_SET_DRAW       = 7,
+    // --- 0x01 - 0x0F: Graphics (Drawing & Binding) ---
+    CMD_CLEAR               = 0x01,
+    CMD_BIND_PIPELINE       = 0x02,
+    CMD_BIND_DESCRIPTOR_SET = 0x03,
+    CMD_DRAW                = 0x04,
+    CMD_DRAW_INDIRECT       = 0x05,
+    CMD_DRAW_INDIRECT_COUNT = 0x06,
+    CMD_BIND_SET_DRAW       = 0x07, // Super Opcode
 
-    // --- Compute (10-14) ---
-    CMD_BIND_COMPUTE        = 10,
-    CMD_DISPATCH            = 11,
-    CMD_BARRIER             = 12,
+    // --- 0x10 - 0x17: Compute ---
+    CMD_BIND_COMPUTE        = 0x10,
+    CMD_DISPATCH            = 0x11,
+    CMD_BARRIER             = 0x12,
 
-    // --- Control Flow (15-19) ---
-    CMD_LABEL               = 15, // (Usually handled by compiler/fixup)
-    CMD_GOTO                = 16,
-    CMD_CALL                = 17,
-    CMD_RET                 = 18,
-    CMD_JUMP_TABLE          = 19, // Replaces/Extends Control Flow
+    // --- 0x18 - 0x2F: Control Flow (Branching & Subroutines) ---
+    CMD_GOTO                = 0x18,
+    CMD_CALL                = 0x19,
+    CMD_RET                 = 0x1A,
+    CMD_JUMP_TABLE          = 0x1B,
+    CMD_LABEL               = 0x1F, // Usually marker-only
 
-    // --- Memory Branching (20-24) ---
-    CMD_SKIP_IF_ZERO        = 20,
-    CMD_SKIP_IF_NOT_ZERO    = 21,
-    CMD_RET_IF_ZERO         = 22,
-    CMD_RET_IF_NOT_ZERO     = 23,
+    // --- 0x30 - 0x3F: Conditional Branching (Memory/Reg) ---
+    CMD_SKIP_IF_ZERO        = 0x30,
+    CMD_SKIP_IF_NOT_ZERO    = 0x31,
+    CMD_RET_IF_ZERO         = 0x32,
+    CMD_RET_IF_NOT_ZERO     = 0x33,
+    CMD_SKIP_REG_ZERO       = 0x34,
+    CMD_SKIP_REG_NOT_ZERO   = 0x35,
 
-    // --- Registers & ALU (25-29) ---
-    CMD_SET_ITER            = 25,
-    CMD_JUMP_ITER           = 26,
-    CMD_LOAD_REG            = 27,
-    CMD_STORE_REG           = 28,
-    CMD_ALU                 = 29,
+    // --- 0x40 - 0x5F: Registers, ALU & Logic ---
+    CMD_SET_ITER            = 0x40,
+    CMD_JUMP_ITER           = 0x41,
+    CMD_LOAD_REG            = 0x42,
+    CMD_STORE_REG           = 0x43,
+    CMD_ALU                 = 0x44,
+    CMD_GEN_RAND            = 0x45,
+    CMD_ASSERT_REG          = 0x46,
+    CMD_PUSH                = 0x47,
+    CMD_POP                 = 0x48,
 
-    // --- Indirect Memory (30-34) ---
-    CMD_LOAD_REG_INDIRECT   = 30,
-    CMD_STORE_REG_INDIRECT  = 31,
-    CMD_SKIP_REG_ZERO       = 32,
-    CMD_SKIP_REG_NOT_ZERO   = 33,
-    CMD_ASSERT_REG          = 34, 
+    // --- 0x60 - 0x6F: Indirect Memory (Complex Addressing) ---
+    CMD_LOAD_REG_INDIRECT   = 0x60,
+    CMD_STORE_REG_INDIRECT  = 0x61,
 
-    // --- Stack & Sync (35+) ---
-    CMD_PUSH                = 35,
-    CMD_POP                 = 36,
-    CMD_SIGNAL_FENCE        = 40,
-    CMD_WAIT_FENCE          = 41,
-    CMD_SKIP_IF_NOT_READY   = 42,
+    // --- 0x70 - 0x7F: Synchronization & Resources ---
+    CMD_SIGNAL_FENCE        = 0x70,
+    CMD_WAIT_FENCE          = 0x71,
+    CMD_SKIP_IF_NOT_READY   = 0x72,
+    CMD_SET_UNIFORM         = 0x75, 
 
-    CMD_SET_UNIFORM         = 50, 
-
-    // --- Debug (100+) ---
-    CMD_PRINT               = 100,
-    CMD_DUMP                = 101
+    // --- 0x80+: Debug & Telemetry ---
+    CMD_PRINT               = 0x80,
+    CMD_DUMP                = 0x81
 } CommandType;
 
 typedef struct CmdHeader {
@@ -1130,6 +1133,11 @@ typedef struct CmdAssertReg {
     uint32_t value;    // Value to compare against
     uint32_t op;       // 0:==, 1:!=, 2:<, 3:>, 4:<=, 5:>=
 } CmdAssertReg;
+
+typedef struct CmdGenRand {
+    CmdHeader header;
+    uint32_t reg;      // Target register to store the random number
+} CmdGenRand;
 
 typedef struct CommandBuffer {
     PyObject_HEAD
