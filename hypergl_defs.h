@@ -467,6 +467,10 @@ typedef struct Context
     int current_stencil_mask;
     int default_texture_unit;
 
+    double start_time;      // App start (absolute)
+    double last_frame_time; // Last submit time
+    float frame_delta;      // Difference (float32 for registers)
+
     uint32_t vm_seed; // The random state for the VM
     
     // UPDATED: 'char' to match Py_T_BOOL expectations
@@ -497,6 +501,7 @@ typedef struct Buffer
 {
     PyObject_HEAD      
     Context *ctx;
+    char name[64];
     int buffer;
     int target;
     int size;
@@ -528,8 +533,7 @@ typedef struct Image
     int array;
     int cubemap;
     int target;
-    
-    // UPDATED: 'char' to match Py_T_BOOL
+    char name[64];
     char renderbuffer;
     
     int layer_count;
@@ -759,6 +763,7 @@ typedef struct {
 #define GL_PARAMETER_BUFFER_ARB 0x80EE 
 #define GL_COMMAND_BARRIER_BIT 0x00000040
 #define GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT 0x00004000
+#define GL_BUFFER_UPDATE_BARRIER_BIT 0x00000200
 
 #define GL_SYNC_GPU_COMMANDS_COMPLETE 0x9117
 #define GL_SYNC_FLUSH_COMMANDS_BIT    0x00000001
@@ -892,6 +897,7 @@ typedef enum CommandType {
     CMD_DRAW_INDIRECT       = 0x05,
     CMD_DRAW_INDIRECT_COUNT = 0x06,
     CMD_BIND_SET_DRAW       = 0x07, // Super Opcode
+    CMD_BIND_SET_DRAW_INDIRECT = 0x08, 
 
     // --- 0x10 - 0x17: Compute ---
     CMD_BIND_COMPUTE        = 0x10,
@@ -920,19 +926,26 @@ typedef enum CommandType {
     CMD_STORE_REG           = 0x43,
     CMD_ALU                 = 0x44,
     CMD_GEN_RAND            = 0x45,
-    CMD_ASSERT_REG          = 0x46,
-    CMD_PUSH                = 0x47,
-    CMD_POP                 = 0x48,
+    CMD_GET_TIME            = 0x46,
+    CMD_GET_DELTA           = 0x47,
+    CMD_ASSERT_REG          = 0x48,
+    CMD_PUSH                = 0x49,
+    CMD_POP                 = 0x4A,
+    CMD_CMP                 = 0x4B, 
+    CMD_SIN_COS             = 0x4C, 
+    CMD_GET_STAT            = 0x4D, 
 
     // --- 0x60 - 0x6F: Indirect Memory (Complex Addressing) ---
     CMD_LOAD_REG_INDIRECT   = 0x60,
     CMD_STORE_REG_INDIRECT  = 0x61,
+    CMD_COPY_BUFFER         = 0x62, 
 
     // --- 0x70 - 0x7F: Synchronization & Resources ---
     CMD_SIGNAL_FENCE        = 0x70,
     CMD_WAIT_FENCE          = 0x71,
     CMD_SKIP_IF_NOT_READY   = 0x72,
     CMD_SET_UNIFORM         = 0x75, 
+    CMD_SET_BUFFER_OFFSET   = 0x76, 
 
     // --- 0x80+: Debug & Telemetry ---
     CMD_PRINT               = 0x80,
@@ -1139,9 +1152,64 @@ typedef struct CmdGenRand {
     uint32_t reg;      // Target register to store the random number
 } CmdGenRand;
 
+typedef struct CmdGetTime {
+    CmdHeader header;
+    uint32_t reg; 
+} CmdGetTime;
+
+typedef struct CmdCmp {
+    CmdHeader header;
+    uint32_t reg_dest; // Where to store the result (0 or 1)
+    uint32_t reg_a;    // Left side
+    uint32_t reg_b;    // Right side
+    uint32_t op;       // 0:==, 1:!=, 2:<, 3:>, 4:<=, 5:>=
+} CmdCmp;
+
+typedef struct CmdSinCos {
+    CmdHeader header;
+    uint32_t reg_in;   // Input (float radians)
+    uint32_t reg_sin;  // Output Sine (float)
+    uint32_t reg_cos;  // Output Cosine (float)
+} CmdSinCos;
+
+typedef struct CmdBindSetDrawIndirect {
+    CmdHeader header;
+    DescriptorSet *set;    // Pointer 1
+    Buffer *buffer;         // Pointer 2 (Indirect data)
+    int32_t count;
+    int32_t offset;
+    int32_t stride;
+    int32_t _pad;
+} CmdBindSetDrawIndirect;
+
+typedef struct CmdSetBufferOffset {
+    CmdHeader header;
+    Buffer *buffer;    // The buffer to bind
+    uint32_t slot;      // Binding index (0-MAX)
+    uint32_t reg_off;   // Register holding the byte offset
+    uint32_t size;      // Fixed size of the range
+    uint32_t type;      // 0: Uniform Buffer, 1: Storage Buffer
+} CmdSetBufferOffset;
+
+typedef struct CmdGetStat {
+    CmdHeader header;
+    uint32_t reg;      // Dest register
+    uint32_t stat_id;  // 0:draws, 1:pipe_swaps, 2:set_swaps, 3:dispatch
+} CmdGetStat;
+
+typedef struct CmdCopyBuffer {
+    CmdHeader header;
+    Buffer *src;       // Pointer 1
+    Buffer *dst;       // Pointer 2
+    uint32_t reg_src;  // i[reg] = source byte offset
+    uint32_t reg_dst;  // i[reg] = destination byte offset
+    uint32_t reg_size; // i[reg] = byte size to copy
+} CmdCopyBuffer;
+
 typedef struct CommandBuffer {
     PyObject_HEAD
     Context *ctx;
+    char name[64];
     
     // The Bytecode
     uint8_t *data;
