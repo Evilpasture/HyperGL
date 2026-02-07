@@ -4906,6 +4906,36 @@ static int Image_set_clear_value(Image *self, PyObject *value, void *closure) {
   return 0;
 }
 
+static PyObject* Image_get_name(Image *self, void *closure) {
+    return PyUnicode_FromString(self->name);
+}
+
+static int Image_set_name(Image *self, PyObject *value, void *closure) {
+    if (!PyUnicode_Check(value)) {
+        PyErr_SetString(PyExc_TypeError, "The name must be a string");
+        return -1;
+    }
+    const char *str = PyUnicode_AsUTF8(value);
+    if (!str) return -1;
+    snprintf(self->name, sizeof(self->name), "%s", str);
+    return 0;
+}
+
+static PyObject* Buffer_get_name(Buffer *self, void *closure) {
+    return PyUnicode_FromString(self->name);
+}
+
+static int Buffer_set_name(Buffer *self, PyObject *value, void *closure) {
+    if (!PyUnicode_Check(value)) {
+        PyErr_SetString(PyExc_TypeError, "The name must be a string");
+        return -1;
+    }
+    const char *str = PyUnicode_AsUTF8(value);
+    if (!str) return -1;
+    snprintf(self->name, sizeof(self->name), "%s", str);
+    return 0;
+}
+
 // -----------------------------------------------------------------------------
 // Type: Pipeline
 // -----------------------------------------------------------------------------
