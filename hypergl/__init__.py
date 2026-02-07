@@ -1,5 +1,6 @@
 # hypergl/__init__.py
 from . import _hypergl_c
+from ._hypergl_c import *
 
 # Module Level Functions
 context = _hypergl_c.context
