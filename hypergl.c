@@ -67,7 +67,7 @@ RESOLVE(void, glBufferData, int, intptr, const void *, int);
 RESOLVE(void, glBufferStorage, int, intptr, const void *, int);
 RESOLVE(void, glBufferSubData, int, intptr, intptr, const void *);
 RESOLVE(void, glGetBufferSubData, int, intptr, intptr, void *);
-RESOLVE(void, glBindBufferRange, int, int, int, intptr, intptr);
+RESOLVE(void, glBindBufferRange, GLenum, GLuint, int, intptr, intptr);
 RESOLVE(void, glClearBufferiv, int, int, const void *);
 RESOLVE(void, glClearBufferuiv, int, int, const void *);
 RESOLVE(void, glClearBufferfv, int, int, const void *);
