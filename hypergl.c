@@ -2533,108 +2533,62 @@ static int parse_size_and_offset(const ImageFace *self, PyObject *size_arg,
   return 1;
 }
 
-static PyObject *read_image_face(ImageFace *src, IntPair size, IntPair offset,
-                                 PyObject *into) {
-  if (!src->ctx || src->ctx->is_lost) {
-    PyErr_SetString(PyExc_RuntimeError, "[HyperGL] context lost");
-    return NULL;
-  }
-  if (!src->framebuffer) {
-    PyErr_SetString(PyExc_RuntimeError, "[HyperGL] invalid framebuffer");
-    return NULL;
-  }
-  if (src->image->samples > 1) {
-    PyObject *temp =
-        PyObject_CallMethod((PyObject *)src->image->ctx, "image", "((ii)O)",
-                            size.x, size.y, src->image->format);
-    if (!temp) {
-      return NULL;
-    }
-
-    // Perform Resolve
-    PyObject *blit = PyObject_CallMethod(
-        (PyObject *)src, "blit", "(O(ii)(ii)(iiii))", temp, 0, 0, size.x,
-        size.y, offset.x, offset.y, size.x, size.y);
-    if (!blit) {
-      Py_DECREF(temp);
-      return NULL;
-    }
-    Py_DECREF(blit);
-
-    // Read from Resolved
-    PyObject *res =
-        PyObject_CallMethod(temp, "read", "(OOO)", Py_None, Py_None, into);
-
-    // Return temp to pool (Using 'O' so we keep ownership for the manual DECREF
-    // below)
-    PyObject *release = PyObject_CallMethod((PyObject *)src->image->ctx,
-                                            "release", "(O)", temp);
-    Py_XDECREF(release);
-    Py_DECREF(temp);
-
-    return res; // res is NULL if the 'read' call failed, which is correct
-  }
-
-  int write_size = size.x * size.y * src->image->fmt.pixel_size;
-
-  if (into == Py_None) {
-    PyObject *res = PyBytes_FromStringAndSize(NULL, write_size);
-    if (!res) {
-      return NULL;
-    }
-
-    PyMutex_Lock(&src->ctx->state_lock);
-    bind_read_framebuffer_internal(src->ctx, src->framebuffer->obj);
-    glReadPixels(offset.x, offset.y, size.x, size.y, src->image->fmt.format,
-                 src->image->fmt.type, PyBytes_AsString(res));
-    PyMutex_Unlock(&src->ctx->state_lock);
-    return res;
-  }
-
-  BufferView *buffer_view = NULL;
-  if (Py_TYPE(into) == src->ctx->module_state->Buffer_type) {
-    buffer_view = (BufferView *)PyObject_CallMethod(into, "view", NULL);
-  } else if (Py_TYPE(into) == src->ctx->module_state->BufferView_type) {
-    buffer_view = (BufferView *)Py_NewRef(into);
-  }
-
-  if (buffer_view) {
-    if (write_size > buffer_view->size) {
-      Py_DECREF(buffer_view);
-      PyErr_Format(PyExc_ValueError, "[HyperGL] invalid size");
-      return NULL;
-    }
-
-    char *ptr = (char *)((unsigned char *)NULL + buffer_view->offset);
-    PyMutex_Lock(&src->ctx->state_lock);
-    bind_read_framebuffer_internal(src->ctx, src->framebuffer->obj);
+static FORCE_INLINE void read_pixels_hardware_internal(Context *ctx, int fbo, IntPair size, IntPair offset, int gl_format, int gl_type, void *dest_ptr) {
+    // Caller MUST hold ctx->state_lock
+    bind_read_framebuffer_internal(ctx, fbo);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(offset.x, offset.y, size.x, size.y, src->image->fmt.format,
-                 src->image->fmt.type, ptr);
-    PyMutex_Unlock(&src->ctx->state_lock);
-    Py_DECREF(buffer_view);
-    Py_RETURN_NONE;
+    
+    Py_BEGIN_ALLOW_THREADS
+    glReadPixels(offset.x, offset.y, size.x, size.y, gl_format, gl_type, dest_ptr);
+    Py_END_ALLOW_THREADS
+}
+
+static PyObject *read_image_face(ImageFace *src, IntPair size, IntPair offset, PyObject *into) {
+  // 1. MSAA Path (Uses Python methods, handles its own locking)
+  if (src->image->samples > 1) {
+    PyObject *temp = PyObject_CallMethod((PyObject *)src->ctx, "image", "((ii)O)", size.x, size.y, src->image->format);
+    if (!temp) return NULL;
+
+    PyObject *blit_res = PyObject_CallMethod((PyObject *)src, "blit", "(O(ii)(ii)(iiii))", temp, 0, 0, size.x, size.y, offset.x, offset.y, size.x, size.y);
+    if (!blit_res) { Py_DECREF(temp); return NULL; }
+    Py_DECREF(blit_res);
+
+    PyObject *res = PyObject_CallMethod(temp, "read", "(OOO)", Py_None, Py_None, into);
+    Py_XDECREF(PyObject_CallMethod((PyObject *)src->ctx, "release", "(O)", temp));
+    Py_DECREF(temp);
+    return res; 
   }
 
-  Py_buffer view;
-  if (PyObject_GetBuffer(into, &view, PyBUF_WRITABLE)) {
-    return NULL;
+  // 2. Direct Hardware Path
+  int write_size = size.x * size.y * src->image->fmt.pixel_size;
+  void *target_ptr = NULL;
+  Py_buffer view = {0};
+  PyObject *res_bytes = NULL;
+
+  // Resolve target pointer without locking
+  if (into == Py_None) {
+      res_bytes = PyBytes_FromStringAndSize(NULL, write_size);
+      if (!res_bytes) return NULL;
+      target_ptr = PyBytes_AsString(res_bytes);
+  } else if (Py_TYPE(into) == src->ctx->module_state->Buffer_type || Py_TYPE(into) == src->ctx->module_state->BufferView_type) {
+      // Re-route to buffer logic (it handles its own locking)
+      PyObject *chunk = PyObject_CallMethod((PyObject *)src->image, "face", "(ii)", src->layer, src->level);
+      PyObject *ret = PyObject_CallMethod(into, "write", "(N)", chunk);
+      return ret;
+  } else {
+      if (PyObject_GetBuffer(into, &view, PyBUF_WRITABLE) < 0) return NULL;
+      if (write_size > (int)view.len) { PyBuffer_Release(&view); PyErr_SetString(PyExc_ValueError, "Buffer too small"); return NULL; }
+      target_ptr = view.buf;
   }
 
-  if (write_size > (int)view.len) {
-    PyBuffer_Release(&view);
-    PyErr_Format(PyExc_ValueError, "[HyperGL] invalid write size");
-    return NULL;
-  }
-
+  // 3. Hardware Lock Phase
   PyMutex_Lock(&src->ctx->state_lock);
-  bind_read_framebuffer_internal(src->ctx, src->framebuffer->obj);
-  glReadPixels(offset.x, offset.y, size.x, size.y, src->image->fmt.format,
-               src->image->fmt.type, view.buf);
+  wait_for_last_work_internal(src->ctx);
+  read_pixels_hardware_internal(src->ctx, src->framebuffer->obj, size, offset, src->image->fmt.format, src->image->fmt.type, target_ptr);
   PyMutex_Unlock(&src->ctx->state_lock);
 
-  PyBuffer_Release(&view);
-  Py_RETURN_NONE;
+  if (view.obj) PyBuffer_Release(&view);
+  return res_bytes ? res_bytes : Py_NewRef(Py_None);
 }
 
 // -----------------------------------------------------------------------------
@@ -4647,59 +4601,48 @@ static PyObject *Image_meth_mipmaps(const Image *self, PyObject *args) {
   Py_RETURN_NONE;
 }
 
-static PyObject *Image_meth_read(const Image *self, PyObject *args,
-                                 PyObject *kwargs) {
+static PyObject *Image_meth_read(const Image *self, PyObject *args, PyObject *kwargs) {
   static char *keywords[] = {"size", "offset", "into", NULL};
+  PyObject *size_arg = Py_None, *offset_arg = Py_None, *into = Py_None;
 
-  PyObject *size_arg = Py_None;
-  PyObject *offset_arg = Py_None;
-  PyObject *into = Py_None;
-
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|OOO", keywords, &size_arg,
-                                   &offset_arg, &into)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|OOO", keywords, &size_arg, &offset_arg, &into))
     return NULL;
-  }
 
-  IntPair size;
-  IntPair offset;
+  IntPair size, offset;
   ImageFace *first_layer = (ImageFace *)PyTuple_GetItem(self->layers, 0);
-  if (!parse_size_and_offset(first_layer, size_arg, offset_arg, &size,
-                             &offset)) {
-    return NULL;
-  }
+  if (!parse_size_and_offset(first_layer, size_arg, offset_arg, &size, &offset)) return NULL;
 
   if (self->ctx->is_lost) {
-    PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
+    PyErr_Format(PyExc_RuntimeError, "[HyperGL] context lost");
     return NULL;
   }
 
+  // LAYERED PATH
   if (self->array || self->cubemap) {
     if (into != Py_None) {
-      PyErr_Format(PyExc_TypeError,
-                   "[HyperGL] cannot read into user buffer for layered images");
+      PyErr_Format(PyExc_TypeError, "[HyperGL] cannot read layered images into user buffer");
       return NULL;
     }
 
-    int write_size = size.x * size.y * self->fmt.pixel_size;
-    PyObject *res = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)write_size *
-                                                        self->layer_count);
+    int face_size = size.x * size.y * self->fmt.pixel_size;
+    PyObject *res = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)face_size * self->layer_count);
+    if (!res) return NULL;
+
     for (int i = 0; i < self->layer_count; ++i) {
       ImageFace *src = (ImageFace *)PyTuple_GetItem(self->layers, i);
-      PyObject *chunk = PyMemoryView_FromMemory(PyBytes_AsString(res) +
-                                                    ((size_t)write_size * i),
-                                                write_size, PyBUF_WRITE);
-      PyObject *temp = read_image_face(src, size, offset, chunk);
-      if (!temp) {
-        Py_DECREF(chunk);
-        Py_DECREF(res);
-        return NULL;
-      }
-      Py_DECREF(chunk);
-      Py_DECREF(temp);
+      // We create a temporary memoryview onto our giant result buffer for each face
+      PyObject *chunk = PyMemoryView_FromMemory(PyBytes_AsString(res) + ((size_t)face_size * i), face_size, PyBUF_WRITE);
+      
+      // read_image_face handles its own inner locking for the pixel transfer
+      PyObject *tmp = read_image_face(src, size, offset, chunk);
+      Py_XDECREF(chunk);
+      if (!tmp) { Py_DECREF(res); return NULL; }
+      Py_DECREF(tmp);
     }
     return res;
   }
 
+  // SINGLE PATH
   return read_image_face(first_layer, size, offset, into);
 }
 
