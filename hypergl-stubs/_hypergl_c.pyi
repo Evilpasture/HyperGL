@@ -597,7 +597,7 @@ class CommandBuffer:
         """Reads a uint32 from a mapped buffer into register i[reg]."""
         ...
 
-    def alu(self, reg_a: int, reg_b: int, op: Literal['add', 'sub', 'mul', 'div', 'and', 'or', "xor", "lsh", "rsh", "not"]) -> None:
+    def alu(self, reg_a: int, reg_b: int, op: Literal['add', 'sub', 'mul', 'div', 'and', 'or', "xor", "lsh", "rsh", "not", "fadd", "fsub", "fmul", "fdiv"]) -> None:
         """Performs i[reg_a] = i[reg_a] OP i[reg_b]."""
         ...
 
