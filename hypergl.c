@@ -4334,6 +4334,7 @@ static Image *Context_meth_image(Context *self, PyObject *args,
     glBindTexture(target, image);
     glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(target, GL_TEXTURE_MAX_LEVEL, levels - 1);
 
     for (int level = 0; level < levels; ++level) {
       int w = least_one(width >> level);
