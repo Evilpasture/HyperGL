@@ -24,18 +24,72 @@ class HGLCompiler:
         self.defines = {} 
 
     def compile(self, source_code: str):
-        # Preprocessing
+        # 1. Preprocess
         expanded = self._preprocess(source_code)
         final_source = self._apply_defines(expanded)
         
-        # Setup for error reporting
-        self.source = final_source
-        self.source_lines = final_source.split('\n')
+        # 2. Tokenize
+        raw_tokens = self._tokenize(final_source)
         
-        self.tokens = self._tokenize(final_source)
+        # 3. Optimize (Dead Code Elimination)
+        self.tokens = self._dce_tokens(raw_tokens)
+        
+        # 4. Parse / Emit
         self.pos = 0
         while self.pos < len(self.tokens):
             self._parse_statement()
+
+    def _dce_tokens(self, tokens):
+        """
+        Performs basic Dead Code Elimination.
+        Removes instructions that are unreachable.
+        """
+        optimized = []
+        i = 0
+        depth = 0 # Track block depth for control flow
+        is_dead = False # Flag for unreachable code
+
+        while i < len(tokens):
+            tk = tokens[i]
+            
+            # If we are in a dead block, we only look for the closing brace or a label
+            # Note: HGL-IR doesn't have explicit GOTO in source, so labels are implicit in blocks.
+            # But 'ret' makes subsequent code in the same block dead.
+            
+            if is_dead:
+                # If we see a closing brace, we might be exiting the dead block scope
+                if tk.type == 'RBRACE':
+                    depth -= 1
+                    if depth < 0: # Should not happen in valid code, but safety check
+                        is_dead = False
+                    # Keep the brace to maintain structure integrity for the parser
+                    optimized.append(tk)
+                elif tk.type == 'LBRACE':
+                    depth += 1 # Nested dead code
+                    
+                # Skip everything else
+                i += 1
+                continue
+
+            # --- Check for Terminators ---
+            if tk.type == 'ID' and tk.value == 'ret':
+                optimized.append(tk)
+                # Everything after 'ret' in the current block is dead
+                is_dead = True
+                depth = 0 # Reset depth tracking for the dead region
+                i += 1
+                continue
+                
+            # --- Normal Flow ---
+            if tk.type == 'LBRACE':
+                depth += 1
+            elif tk.type == 'RBRACE':
+                depth -= 1
+                
+            optimized.append(tk)
+            i += 1
+            
+        return optimized
             
     # --- Error Reporting ---
     def _fail(self, msg: str, token: Token | None = None):
