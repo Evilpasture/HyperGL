@@ -5758,6 +5758,8 @@ static Compute *Context_meth_compute(Context *self, PyObject *args,
     goto fail;
   }
 
+  memset((char *)res + sizeof(PyObject), 0, sizeof(Compute) - sizeof(PyObject));
+
   res->ctx = self;
   Py_INCREF(self);
   res->program = program; program = NULL;
