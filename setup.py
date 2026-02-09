@@ -1,9 +1,42 @@
-import os
+import subprocess
 import shutil
+import os
 import re
 import sys
 import sysconfig
 from setuptools import Extension, setup
+from setuptools.command.build_ext import build_ext
+
+YELLOW = "\033[33m"
+RESET = "\033[0m"
+
+class ClangBuildExt(build_ext):
+    def build_extensions(self):
+        clang_path = find_llvm_clang()
+        if clang_path:
+            old_spawn = self.compiler.spawn
+            
+            def clang_spawn(cmd, *args, **kwargs):
+                cmd = list(cmd)
+                
+                if "cl.exe" in cmd[0].lower():
+                    cmd[0] = clang_path
+                
+                elif "link.exe" in cmd[0].lower():
+                    lld_path = clang_path.replace("clang-cl.exe", "lld-link.exe")
+                    if os.path.exists(lld_path):
+                        cmd[0] = lld_path
+                        # Clean up flags that lld-link doesn't understand
+                        # We remove anything starting with /clang: because that's for the compiler wrapper
+                        cmd = [arg for arg in cmd if not arg.startswith('/clang:')]
+                        
+                return old_spawn(cmd, *args, **kwargs)
+            
+            self.compiler.spawn = clang_spawn
+            # Using the yellow color we talked about!
+            print(f"\033[33m--- HIJACKED: Swapping cl.exe -> {clang_path} ---\033[0m")
+            
+        super().build_extensions()
 
 # --- Metadata Extraction ---
 try:
@@ -24,19 +57,41 @@ if tomllib:
         pass
 
 def find_llvm_clang():
-    """Attempts to find the path to clang-cl.exe"""
+    # 1. Trust the user's PATH first
     which_clang = shutil.which("clang-cl")
     if which_clang:
+        print("Clang-Cl found.", which_clang)
         return which_clang
 
-    potential_paths = [
-        "C:\\Program Files\\LLVM\\bin\\clang-cl.exe",
-        "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\Llvm\\x64\\bin\\clang-cl.exe",
-        "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\Llvm\\x64\\bin\\clang-cl.exe"
-    ]
-    for path in potential_paths:
-        if os.path.exists(path):
-            return path
+    # 2. Use vswhere to find the Visual Studio installation path
+    try:
+        # We look for any VS instance that has the LLVM component installed
+        vswhere_path = os.path.expandvars("%ProgramFiles(x86)%\\Microsoft Visual Studio\\Installer\\vswhere.exe")
+        if os.path.exists(vswhere_path):
+            vs_path = subprocess.check_output([
+                vswhere_path, 
+                "-latest", 
+                "-products", "*", 
+                "-requires", "Microsoft.VisualStudio.Component.VC.Llvm.Clang", 
+                "-property", "installationPath"
+            ]).decode().strip()
+            
+            if vs_path:
+                # VS keeps Clang in a specific subfolder structure
+                # We search for clang-cl.exe within that folder
+                for root, dirs, files in os.walk(os.path.join(vs_path, "VC\\Tools\\Llvm")):
+                    if "clang-cl.exe" in files:
+                        if "x64" in root.lower() and "arm64" not in root.lower():
+                            print("Clang-Cl found via vswhere")
+                            return os.path.join(root, "clang-cl.exe")
+    except Exception:
+        pass
+
+    # 3. Last ditch effort: Common LLVM standalone path
+    standard_llvm = "C:\\Program Files\\LLVM\\bin\\clang-cl.exe"
+    if os.path.exists(standard_llvm):
+        return standard_llvm
+    print(f"{YELLOW}Warning:{RESET} Clang-Cl not found.")
     return None
 
 # --- Compiler Configuration ---
@@ -51,9 +106,11 @@ if sys.platform == 'win32':
     clang_bin = find_llvm_clang()
     # Replace /O2 with /O3 if we found clang
     if clang_bin:
-        extra_compile_args.append('/clang:--target=x86_64-pc-windows-msvc')
         # Aggressive clang-cl optimization
-        optimization_flag = '/O3' 
+        extra_compile_args.append('/clang:--target=x86_64-pc-windows-msvc')
+        optimization_flag = '/clang:-O3' 
+        extra_compile_args.append('/clang:-flto')
+        extra_link_args.append('/clang:-flto') # Tells the linker to use the LLVM plugin
     else:
         optimization_flag = '/O2'
 
@@ -100,6 +157,7 @@ ext = Extension(
 setup(
     name='hypergl',
     version=version,
+    cmdclass={'build_ext': ClangBuildExt}, # This overrides the default build behavior
     ext_modules=[ext],
     packages=['hypergl', 'hypergl-stubs'],
     package_data={
