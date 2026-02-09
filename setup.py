@@ -18,17 +18,25 @@ class ClangBuildExt(build_ext):
             
             def clang_spawn(cmd, *args, **kwargs):
                 cmd = list(cmd)
+                executable = os.path.basename(cmd[0]).lower()
                 
-                if "cl.exe" in cmd[0].lower():
-                    cmd[0] = clang_path
-                
-                elif "link.exe" in cmd[0].lower():
-                    lld_path = clang_path.replace("clang-cl.exe", "lld-link.exe")
+                # 1. Handle the Compiler
+                if executable == "cl.exe":
+                    cmd[0] = clang_path # Point to clang-cl.exe
+                    
+                # 2. Handle the Linker
+                elif executable == "link.exe":
+                    # Find lld-link.exe in the same directory as clang-cl
+                    lld_path = os.path.join(os.path.dirname(clang_path), "lld-link.exe")
                     if os.path.exists(lld_path):
                         cmd[0] = lld_path
-                        # Clean up flags that lld-link doesn't understand
-                        # We remove anything starting with /clang: because that's for the compiler wrapper
+                        # Strip out flags lld-link hates (like the compiler-specific /clang: ones)
                         cmd = [arg for arg in cmd if not arg.startswith('/clang:')]
+                        # Ensure /LTCG is present for LTO compatibility
+                        if '/LTCG' not in cmd:
+                            cmd.append('/LTCG')
+                    else:
+                        print(f"Warning: lld-link not found at {lld_path}, falling back to default link.exe")
                         
                 return old_spawn(cmd, *args, **kwargs)
             
