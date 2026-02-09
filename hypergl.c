@@ -771,7 +771,7 @@ static FORCE_INLINE void wait_for_last_work_internal(Context *ctx) {
     }
 }
 
-static FORCE_INLINE void wait_for_last_work(Context *self) {
+static FORCE_INLINE UNUSED void wait_for_last_work(Context *self) {
     PyMutex_Lock(&self->state_lock);
     wait_for_last_work_internal(self);
     PyMutex_Unlock(&self->state_lock);
