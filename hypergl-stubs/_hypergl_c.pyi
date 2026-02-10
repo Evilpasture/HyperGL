@@ -597,8 +597,16 @@ class CommandBuffer:
         """Reads a uint32 from a mapped buffer into register i[reg]."""
         ...
 
-    def alu(self, reg_a: int, reg_b: int, op: Literal['add', 'sub', 'mul', 'div', 'and', 'or', "xor", "lsh", "rsh", "not", "fadd", "fsub", "fmul", "fdiv"]) -> None:
-        """Performs i[reg_a] = i[reg_a] OP i[reg_b]."""
+    def alu(self, reg_a: int, reg_b: int, op: Literal[
+        'add', 'sub', 'mul', 'div', 
+        'and', 'or', 'xor', 'lsh', 'rsh', 'not',
+        'fadd', 'fsub', 'fmul', 'fdiv'
+    ]) -> None:
+        """
+        Bytecode Instruction: ALU
+        Performs i[reg_a] = i[reg_a] OP i[reg_b].
+        Supports both Integer and Floating Point (IEEE-754) arithmetic.
+        """
         ...
 
     def ret(self) -> None:
@@ -705,11 +713,17 @@ class CommandBuffer:
         """
         ...
 
-    def set_uniform(self, location: int, reg: int, type: UniformType = 'float') -> None:
+    def set_uniform(self, location: int, reg: int, type: Union[UniformType, int] = 'float') -> None:
         """
         Bytecode Instruction: SET_UNIFORM
         Injects the current 32-bit value of internal VM register i[reg] directly 
         into a shader uniform location.
+        
+        Args:
+            location: The hardware location index.
+            reg: Register index (0-7).
+            type: Interpretation of the bits. Accepts 'float'/'int'/'uint' 
+                  or raw integer IDs (0, 1, 2) for reflection-optimized calls.
         """
         ...
 
@@ -753,7 +767,15 @@ class CommandBuffer:
     def cmp(self, dest: int, reg_a: int, reg_b: int, op: Literal['==', '!=', '<', '>', '<=', '>='] = '==') -> None:
         """
         Bytecode Instruction: CMP
-        Performs i[dest] = (i[reg_a] OP i[reg_b]) ? 1 : 0.
+        Performs a signed integer comparison: i[dest] = (i[reg_a] OP i[reg_b]) ? 1 : 0.
+        """
+        ...
+
+    def fcmp(self, dest: int, reg_a: int, reg_b: int, op: Literal['==', '!=', '<', '>', '<=', '>='] = '==') -> None:
+        """
+        Bytecode Instruction: FCMP
+        Performs a floating-point comparison: i[dest] = (float(i[reg_a]) OP float(i[reg_b])) ? 1 : 0.
+        Essential for logic involving sine waves, time, or positions.
         """
         ...
 
@@ -776,7 +798,8 @@ class CommandBuffer:
     def get_stat(self, reg: int, stat: Literal['draw_calls', 'pipeline_swaps', 'set_swaps', 'dispatch_calls']) -> None:
         """
         Bytecode Instruction: GET_STAT
-        Reads a performance counter from the current context and stores it in i[reg].
+        Reads a real-time performance counter from the Context into register i[reg].
+        Useful for dynamic Level-of-Detail (LOD) or debug overlays.
         """
         ...
 
