@@ -1,208 +1,159 @@
-# The HGL-IR Programming Language
+# The HGL-IR Programming Language v2.0
 
 **HGL-IR (HyperGL Intermediate Representation)** is a high-performance scripting language for GPU orchestration. It compiles directly to HyperGL VM Bytecode.
 
-Unlike Python, which incurs interpreter overhead, HGL-IR executes at the speed of C. It is designed for:
+Unlike Python, which incurs interpreter overhead, HGL-IR executes at the speed of C (Zero-GIL). It is designed for:
 *   **Procedural Animation:** Calculating positions/rotations on the fly.
 *   **GPU-Driven Rendering:** Logic that decides what to draw based on GPU memory.
 *   **Zero-Overhead Loops:** Issuing 10,000 draw calls without a Python loop.
 
----
 
-## 1. Basic Syntax
+## 1. Variables & Registers
 
-HGL-IR is an assembly-like language with high-level control structures.
+HGL-IR offers two ways to manage data: **High-Level Variables** (Recommended) and **Raw Registers** (Assembly-style).
 
-### Registers
-The VM has **8 General Purpose Registers** (`i0` through `i7`).
-*   They hold 32-bit values (Integer, Float, or Bitmask).
-*   They persist across function calls.
+### Automatic Variables (`var`)
+The compiler includes a register allocator. You can declare variables, and the compiler maps them to available hardware registers (`i0`-`i5`).
+
+```hgl
+var t = time()
+var speed = 2.0
+fmul t, speed
+```
+
+### Hardware Registers
+The VM has **8 General Purpose 32-bit Registers** (`i0` through `i7`).
+*   **i0 - i5:** Available for user logic.
+*   **i6 - i7:** Reserved scratchpads for the compiler (used for immediate values and comparison results).
 
 ```hgl
 mov i0, 100        // Integer
 mov i1, 3.14159    // Float (Automatically bit-cast)
-mov i2, 0xFF00FF   // Hex
 ```
 
-### The Environment (`@`)
-HGL-IR cannot create resources (Buffers/Pipelines). It references objects created in Python using the `@` symbol. These references are resolved via the `env` dictionary passed to the compiler.
+## 2. Smart Properties (Reflection)
+
+Instead of manually binding uniforms using strings and types, HGL-IR uses **Compile-Time Reflection** to look up uniform locations and types from your Python objects.
+
+**Syntax:** `@object.property = value`
 
 ```hgl
-bind @my_pipeline  // Looks up 'my_pipeline' in the Python env dict
-store i0, @my_buf, 0
+# Old Way (Legacy)
+# uniform @pipe, "u_Time", t, "float"
+
+# New Way (Recommended)
+# 1. Compiler finds 'u_Time' location in @pipe
+# 2. Compiler detects type is GL_FLOAT
+# 3. Compiler emits optimized bytecode
+@pipe.u_Time = t
 ```
-
-### Comments
-```hgl
-// This is a comment
-# This is also a comment
-```
-
----
-
-## 2. Preprocessor & Aliases
-
-HGL-IR supports a safe, two-pass preprocessor for modularity.
-
-### Directives
-*   `#define KEY VALUE`: Constant replacement.
-*   `#include "key"`: Inserts the content of `env["key"]` into the script.
-
-### Register Aliasing
-Give registers meaningful names to keep your code readable.
-
-```hgl
-#include "constants.hgl"
-
-alias counter = i0
-alias offset  = i1
-
-mov counter, MAX_ITEMS  // MAX_ITEMS defined in constants.hgl
-```
-
----
 
 ## 3. Control Flow
 
-Unlike raw assembly, HGL-IR provides structured blocks to handle jumps and labels automatically.
+### Conditionals (`if` vs `fif`)
+Because the VM is typeless, you must explicitly choose between Integer and Floating-Point logic.
+
+| Command | Usage | Description |
+| :--- | :--- | :--- |
+| **`if`** | `if i0 < 10 { ... }` | **Integer** comparison. Use for counters, loops, bools. |
+| **`fif`** | `fif sin_val > 0.0 { ... }` | **Float** comparison. Use for positions, physics, time. |
 
 ### Loops
 The `loop` construct repeats a block `N` times. The counter counts **down**.
 
 ```hgl
-// i0 will go: 10, 9, 8 ... 1
+# i0 will go: 10, 9, 8 ... 1
 loop 10 using i0 {
-    print "Iteration"
-    print i0
+    draw 6, 1
 }
 ```
 
-### Conditionals (`if`)
-Executes the block if the register comparison is true.
-Operators: `==`, `!=`, `<`, `>`, `<=`, `>=`.
 
-```hgl
-if i0 < i1 {
-    draw 3, 1
-}
-```
+## 4. Built-in Functions
 
-### Subroutines (`call` / `ret`)
-You can call other CommandBuffers as subroutines.
+HGL-IR supports functional syntax for common system operations.
 
-```hgl
-call @sub_buffer
-```
+| Syntax | Description |
+| :--- | :--- |
+| `var x = time()` | Stores app time (sec) in `x`. |
+| `var dt = delta()` | Stores frame delta time in `dt`. |
+| `var r = rand()` | Stores random `uint32` bits in `r`. |
+| `var (s, c) = sincos(x)` | Calculates Sine and Cosine of `x`. Returns tuple. |
 
----
 
-## 4. Instruction Set Reference
+## 5. Instruction Set Reference
 
-### 📦 Data Movement
+### Data Movement
 | Instruction | Syntax | Description |
 | :--- | :--- | :--- |
-| **mov** | `mov REG, VAL_OR_REG` | Sets register to a value (int/float) or copies another register. |
-| **alias** | `alias NAME = REG` | Assigns a name to a register. |
+| **mov** | `mov REG, VAL` | Sets register to a value or copies another register. |
+| **alias** | `alias NAME = REG` | Manual register naming. |
+| **var** | `var NAME = VAL` | Automatic register allocation. |
 
-### 📐 Arithmetic (ALU)
+### Arithmetic (ALU)
 All math operations work in-place: `DEST = DEST op SRC`.
 
-| Opcode | Description |
-| :--- | :--- |
-| `add`, `sub`, `mul`, `div` | **Integer** arithmetic. |
-| `fadd`, `fsub`, `fmul`, `fdiv` | **Floating Point** arithmetic (IEEE-754). |
-| `and`, `or`, `xor` | Bitwise logic. |
-| `lsh`, `rsh` | Bitwise Shift Left / Right. |
-| `not` | Bitwise NOT (Unary: `not i0`). |
-
-### 🔮 Procedural Math
-| Instruction | Syntax | Description |
+| Category | Opcodes | Description |
 | :--- | :--- | :--- |
-| **sincos** | `sincos IN, SIN, COS` | Calculates sin/cos of `IN` (radians). Output is float. |
-| **rand** | `rand DEST` | Generates a random `uint32` using Xorshift32. |
+| **Integer** | `add`, `sub`, `mul`, `div` | Standard integer math. |
+| **Float** | `fadd`, `fsub`, `fmul`, `fdiv` | IEEE-754 Floating Point math. |
+| **Bitwise** | `and`, `or`, `xor`, `not` | Bitwise logic. |
+| **Shift** | `lsh`, `rsh` | Left/Right bit shift. |
 
-### 💾 Memory Access
-| Instruction | Syntax | Description |
+### Comparison
+| Opcode | Syntax | Description |
 | :--- | :--- | :--- |
-| **store** | `store REG, @BUF, OFFSET` | Writes register to `@BUF` at literal byte offset. |
-| **load** | `load REG, @BUF, OFFSET` | Reads from `@BUF` into register. |
-| **store_indirect** | `store_indirect VAL, @BUF, IDX, STRIDE` | Writes `VAL` to `BUF[IDX * STRIDE]`. |
-| **load_indirect** | `load_indirect DEST, @BUF, IDX, STRIDE` | Reads `DEST` from `BUF[IDX * STRIDE]`. |
-| **copy** | `copy @SRC, @DST, S_OFF, D_OFF, SIZE` | GPU-side `memcpy` between buffers (Register offsets). |
-| **slide** | `slide @BUF, SLOT, REG, SIZE, "TYPE"` | Slides a UBO/SSBO window based on register offset. |
+| **cmp** | `cmp DST, A, B, "OP"` | **Integer** Compare. Stores 1 or 0 in DST. |
+| **fcmp** | `fcmp DST, A, B, "OP"` | **Float** Compare. Stores 1 or 0 in DST. |
 
-### 🎨 Rendering & Compute
+*Operators:* `==`, `!=`, `<`, `>`, `<=`, `>=`.
+
+### Memory & Rendering
 | Instruction | Syntax | Description |
 | :--- | :--- | :--- |
 | **bind** | `bind @OBJ` | Binds Pipeline, Compute, or DescriptorSet. |
-| **draw** | `draw COUNT, INSTANCE` | Draw call. Omit args to use Pipeline defaults. |
+| **draw** | `draw COUNT, INSTANCE` | Draw call. |
 | **dispatch** | `dispatch X, Y, Z` | Compute dispatch. |
-| **draw_mdi_count** | `draw_mdi_count @DRAW, @CNT, MAX` | GPU-Driven Indirect Draw (GL 4.6). |
-| **uniform** | `uniform @PIPE, "NAME", REG, "TYPE"` | Injects register value into a named shader uniform. |
+| **store** | `store REG, @BUF, OFFSET` | Writes register to `@BUF`. |
+| **load** | `load REG, @BUF, OFFSET` | Reads from `@BUF` into register. |
+| **slide** | `slide @BUF, SLOT, REG, SIZE` | Slides a UBO/SSBO window based on register offset. |
 | **barrier** | `barrier` | Memory barrier for Compute->Draw sync. |
-| **clear** | `clear` | Clears framebuffer. |
 
-### ⚙️ System & Debug
-| Instruction | Syntax | Description |
-| :--- | :--- | :--- |
-| **time** | `time REG` | Stores app time (sec) as float in register. |
-| **delta** | `delta REG` | Stores frame delta (sec) as float in register. |
-| **print** | `print "Msg"` (opt: `REG`) | Prints message (and optional register) to stderr. |
-| **assert** | `assert REG, VAL, "OP"` | Halts execution if condition fails. |
 
----
+## 6. Example Program
 
-## 5. Example Program
-
-This script implements a **GPU-Driven Particle Jitter**. It iterates through an array of objects, calculates a random offset for each, updates their position in memory, and draws them.
+This script implements a **GPU-Driven Strobe Light**. It uses floating-point math to calculate a sine wave and conditional logic to toggle rendering.
 
 ```python
 import hypergl
 from hypergl import HGLCompiler
 
 # 1. Setup Python Resources
-ctx = hypergl.context()
 pipe = ctx.pipeline(...)
-ubo = ctx.buffer(size=4096, uniform=True)
 
 # 2. The HGL-IR Script
 script = """
-    # Registers
-    alias loop_idx = i0
-    alias rand_val = i1
-    alias offset   = i2
+    # 1. Automatic Variable Declaration
+    var t = time()
+    var (s, c) = sincos(t)
     
+    # 2. Setup State
     bind @my_pipe
-
-    # Loop 100 times (draw 100 objects)
-    loop 100 using loop_idx {
-        
-        # 1. Generate Random Jitter (Float 0.0 - 1.0)
-        # Note: 'rand' gives uint bits. To use as float, we mask or use logic.
-        # Simple version: just use raw bits for visual noise.
-        rand rand_val
-        
-        # 2. Update Uniform Buffer at correct slot
-        # Calculate offset: (100 - loop_idx) * 16 (std140 alignment)
-        mov offset, 100
-        sub offset, loop_idx
-        mov i3, 16
-        mul offset, i3
-        
-        # Write random pos to UBO
-        store_indirect rand_val, @my_ubo, offset, 1
-        
-        # 3. Slide the UBO window for the shader
-        slide @my_ubo, 0, offset, 16, "uniform"
-        
-        # 4. Draw
-        draw 6, 1
+    
+    # 3. Smart Property Setting
+    # Automatically finds 'u_Offset' location and type (float)
+    @my_pipe.u_Offset = s
+    
+    # 4. Floating Point Logic
+    # If sine is positive, draw. If negative, skip.
+    fif s > 0.0 {
+        draw 3, 1
     }
 """
 
 # 3. Compile and Run
 cmd = ctx.command_buffer()
-comp = HGLCompiler(cmd, env={'my_pipe': pipe, 'my_ubo': ubo})
+comp = HGLCompiler(cmd, env={'my_pipe': pipe})
 comp.compile(script)
 
 cmd.submit()
