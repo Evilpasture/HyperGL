@@ -8859,6 +8859,41 @@ static PyObject *CommandBuffer_meth_cmp(CommandBuffer *self, PyObject *args, PyO
     Py_RETURN_NONE;
 }
 
+static PyObject *CommandBuffer_meth_fcmp(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
+    static char *kw[] = {"dest", "reg_a", "reg_b", "op", NULL};
+    int dest, a, b, op_code = 0;
+    PyObject *op_obj;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "iiiO", kw, &dest, &a, &b, &op_obj)) return NULL;
+
+    if (dest < 0 || dest > 7 || a < 0 || a > 7 || b < 0 || b > 7) 
+        return PyErr_Format(PyExc_ValueError, "Registers must be 0-7");
+
+    // Reuse the same logic to parse the operator string (==, <, >, etc.)
+    if (PyUnicode_Check(op_obj)) {
+        const char *s = PyUnicode_AsUTF8(op_obj);
+        if (strcmp(s, "==") == 0)      op_code = 0;
+        else if (strcmp(s, "!=") == 0) op_code = 1;
+        else if (strcmp(s, "<") == 0)  op_code = 2;
+        else if (strcmp(s, ">") == 0)  op_code = 3;
+        else if (strcmp(s, "<=") == 0) op_code = 4;
+        else if (strcmp(s, ">=") == 0) op_code = 5;
+    }
+
+    if (CommandBuffer_ensure(self, sizeof(CmdCmp)) < 0) return NULL;
+
+    CmdCmp *cmd = (CmdCmp *)(self->data + self->size);
+    cmd->header.type = CMD_FCMP;
+    cmd->header.size = sizeof(CmdCmp);
+    cmd->reg_dest = (uint32_t)dest;
+    cmd->reg_a = (uint32_t)a;
+    cmd->reg_b = (uint32_t)b;
+    cmd->op = (uint32_t)op_code;
+
+    self->size += sizeof(CmdCmp);
+    Py_RETURN_NONE;
+}
+
 static PyObject *CommandBuffer_meth_sin_cos(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
     static char *kw[] = {"reg_in", "dest_sin", "dest_cos", NULL};
     int in, s_out, c_out;
@@ -8966,14 +9001,14 @@ static PyObject *CommandBuffer_meth_copy_buffer(CommandBuffer *self, PyObject *a
  * @param active_compute Double pointer to track the current Compute Pipeline across calls.
  * @param active_set     Double pointer to track the current DescriptorSet across calls.
  * @return
-   HGL_STATUS_OK               = 0
-   HGL_STATUS_ERR_STACK_OVER   = 1
-   HGL_STATUS_ERR_STACK_UNDER  = 2
-   HGL_STATUS_ERR_INVALID_OP   = 3
-   HGL_STATUS_ERR_SIGNAL       = 4
-   HGL_STATUS_ERR_NESTED_LIMIT = 5
-   HGL_STATUS_ERR_UNFINISHED   = 6
-   HGL_STATUS_ERR_BUDGET       = 7
+   HGL_STATUS_OK               = 0,
+   HGL_STATUS_ERR_STACK_OVER   = 1,
+   HGL_STATUS_ERR_STACK_UNDER  = 2,
+   HGL_STATUS_ERR_INVALID_OP   = 3,
+   HGL_STATUS_ERR_SIGNAL       = 4,
+   HGL_STATUS_ERR_NESTED_LIMIT = 5,
+   HGL_STATUS_ERR_UNFINISHED   = 6,
+   HGL_STATUS_ERR_BUDGET       = 7,
    HGL_STATUS_ERR_ASSERT       = 8
  */
 static int CommandBuffer_execute_internal(CommandBuffer *self, int depth,
@@ -9631,7 +9666,7 @@ static int CommandBuffer_execute_internal(CommandBuffer *self, int depth,
         memcpy(&regs[c->reg & 7], &dt, 4);
         break;
     }
-    case CMD_CMP: {
+    case CMD_CMP: { // Integer Path
         CmdCmp *c = (CmdCmp *)ptr;
         uint32_t va = regs[c->reg_a & 7];
         uint32_t vb = regs[c->reg_b & 7];
@@ -9643,6 +9678,23 @@ static int CommandBuffer_execute_internal(CommandBuffer *self, int depth,
             case 3: res = (va >  vb); break;
             case 4: res = (va <= vb); break;
             case 5: res = (va >= vb); break;
+            default: continue;
+        }
+        regs[c->reg_dest & 7] = (uint32_t)res;
+        break;
+    }
+
+    case CMD_FCMP: { // Float Path
+        CmdCmp *c = (CmdCmp *)ptr;
+        float fa, fb;
+        memcpy(&fa, &regs[c->reg_a & 7], 4);
+        memcpy(&fb, &regs[c->reg_b & 7], 4);
+        int res = 0;
+        switch (c->op) {
+            case 0: res = (fa == fb); break;
+            case 1: res = (fa != fb); break;
+            case 2: res = (fa <  fb); break;
+            case 3: res = (fa >  fb); break;
             default: continue;
         }
         regs[c->reg_dest & 7] = (uint32_t)res;
@@ -10130,6 +10182,7 @@ static PyMethodDef CommandBuffer_methods[] = {
     {"get_time",            (PyCFunction)CommandBuffer_meth_get_time,            METH_O,       NULL},
     {"get_delta",           (PyCFunction)CommandBuffer_meth_get_delta,           METH_O,       NULL},
     {"cmp",                 (PyCFunction)CommandBuffer_meth_cmp,                 METH_VARARGS | METH_KEYWORDS, NULL},
+    {"fcmp",                (PyCFunction)CommandBuffer_meth_fcmp,                METH_VARARGS | METH_KEYWORDS, NULL},
     {"sin_cos",             (PyCFunction)CommandBuffer_meth_sin_cos,             METH_VARARGS | METH_KEYWORDS, NULL},
 
     // --- Synchronization ---
