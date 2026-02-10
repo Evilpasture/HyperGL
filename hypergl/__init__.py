@@ -40,14 +40,14 @@ from ._hypergl import (
     subroutine
 )
 
-from .hgl_ir import HGLCompiler
+from .hgl_ir import HGLCompiler, Token
 
 __all__ = [
     'Error',
     'init', 'cleanup', 'context', 'loader', 'inspect',
     'Context', 'Buffer', 'Image', 'Pipeline', 'Compute', 'DescriptorSet', 'Fence', 'CommandBuffer',
     'bind', 'camera', 'calcsize',
-    'SceneCompiler', 'subroutine', 'HGLCompiler',
+    'SceneCompiler', 'subroutine', 'HGLCompiler', 'Token',
     # Constants
     'ALREADY_SIGNALED', 'TIMEOUT_EXPIRED', 'CONDITION_SATISFIED', 'WAIT_FAILED',
     'TIMEOUT_IGNORED', 'SYNC_GPU_COMMANDS_COMPLETE', 'SYNC_FLUSH_COMMANDS_BIT'
