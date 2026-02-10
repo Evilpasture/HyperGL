@@ -8428,20 +8428,32 @@ static PyObject *CommandBuffer_meth_pop(CommandBuffer *self, PyObject *arg) {
 }
 
 static PyObject *CommandBuffer_meth_set_uniform(CommandBuffer *self, PyObject *args, PyObject *kwargs) {
-    static char *keywords[] = {"location", "reg", "type", NULL}; // Define keywords
+    static char *keywords[] = {"location", "reg", "type", NULL};
     int location, reg;
-    const char *type_str = "float";
+    PyObject *type_arg = NULL; // Accepts generic Python Object
 
-    // Use PyArg_ParseTupleAndKeywords instead of PyArg_ParseTuple
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ii|s", keywords, &location, &reg, &type_str)) 
+    // Change format string from "ii|s" to "ii|O" to accept any object type
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ii|O", keywords, &location, &reg, &type_arg)) 
         return NULL;
 
     if (reg < 0 || reg > 7) return PyErr_Format(PyExc_ValueError, "Register index must be 0-7");
-    if (location < 0) return PyErr_Format(PyExc_ValueError, "Invalid uniform location");
+    // Note: location can be -1 (GL spec says -1 is silently ignored), so we allow it.
 
-    uint32_t type_enum = 0;
-    if (strcmp(type_str, "int") == 0) type_enum = 1;
-    else if (strcmp(type_str, "uint") == 0) type_enum = 2;
+    uint32_t type_enum = 0; // Default: Float (0)
+
+    if (type_arg) {
+        if (PyLong_Check(type_arg)) {
+            // FAST PATH: Reflection passed an integer directly
+            type_enum = (uint32_t)PyLong_AsUnsignedLong(type_arg);
+        } else if (PyUnicode_Check(type_arg)) {
+            // LEGACY PATH: Script used string "int", "uint"
+            const char *s = PyUnicode_AsUTF8(type_arg);
+            if (s) {
+                if (strcmp(s, "int") == 0) type_enum = 1;
+                else if (strcmp(s, "uint") == 0) type_enum = 2;
+            }
+        }
+    }
 
     if (CommandBuffer_ensure(self, sizeof(CmdSetUniform)) < 0) return NULL;
 
