@@ -934,6 +934,7 @@ typedef enum CommandType {
     CMD_CMP                 = 0x4B, 
     CMD_SIN_COS             = 0x4C, 
     CMD_GET_STAT            = 0x4D, 
+    CMD_FCMP                = 0x4E,
 
     // --- 0x60 - 0x6F: Indirect Memory (Complex Addressing) ---
     CMD_LOAD_REG_INDIRECT   = 0x60,
