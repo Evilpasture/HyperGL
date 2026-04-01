@@ -29,6 +29,13 @@
     X(IDX_PL_RENDER_DATA,    "render_data",     PyObject *, 0) \
     X(IDX_PL_INCLUDES,       "includes",        PyObject *, 0)
 
+#define SCHEMA_NEW_FRAME(X) \
+    X(IDX_NF_RESET, "reset", bool, 0) \
+    X(IDX_NF_CLEAR, "clear", bool, 0)
+#define SCHEMA_END_FRAME(X) \
+    X(IDX_EF_CLEAN, "clean", bool, 0) \
+    X(IDX_EF_FLUSH, "flush", bool, 0)
+
 // --- 2. GENERATE ENUM & COUNT ---
 #define GEN_ENUM(ID, NAME, TYPE, REQ) ID,
 
@@ -36,6 +43,8 @@
     typedef enum { Schema(GEN_ENUM) GroupName##_COUNT } GroupName##_Idx;
 
 DEFINE_INDEX_GROUP(Pipeline, SCHEMA_PIPELINE)
+DEFINE_INDEX_GROUP(NewFrame, SCHEMA_NEW_FRAME)
+DEFINE_INDEX_GROUP(EndFrame, SCHEMA_END_FRAME)
 
 // --- 3. DECLARE PARSER GLOBALLY ---
 #define DECLARE_PARSER(ParserName, GroupName) \
@@ -43,6 +52,8 @@ DEFINE_INDEX_GROUP(Pipeline, SCHEMA_PIPELINE)
     extern FastArgSpec ParserName##Specs[GroupName##_COUNT];
 
 DECLARE_PARSER(Pipeline, Pipeline)
+DECLARE_PARSER(NewFrame, NewFrame)
+DECLARE_PARSER(EndFrame, EndFrame)
 
 // Call this during your Module Initialization!
 void hypergl_init_all_parsers(void);

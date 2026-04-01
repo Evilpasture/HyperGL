@@ -4969,8 +4969,40 @@ static int Buffer_set_name(Buffer *self, PyObject *value, void *closure) {
 // Type: Pipeline
 // -----------------------------------------------------------------------------
 
-static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *kwargs) {
-  // 1. Variable Declarations
+// Helper: Synthesize a PyDict from FastCall inputs
+static PyObject *dict_from_fastcall(PyObject *const *args, Py_ssize_t nargs,
+                                    PyObject *kwnames) {
+  PyObject *d = PyDict_New();
+  if (!d)
+    return NULL;
+
+  Py_ssize_t nkw = PyTuple_GET_SIZE(kwnames);
+  PyObject *const *kw_values = args + nargs; // Values start after positionals
+
+  for (Py_ssize_t i = 0; i < nkw; ++i) {
+    PyObject *key = PyTuple_GET_ITEM(kwnames, i);
+    PyObject *val = kw_values[i];
+    if (PyDict_SetItem(d, key, val) < 0) {
+      Py_DECREF(d);
+      return NULL;
+    }
+  }
+  return d;
+}
+
+static Pipeline *Context_meth_pipeline(Context *self, PyObject *const *args,
+                                       size_t nargsf, PyObject *kwnames) {
+  // Calculate positional argument count
+  auto nargs = PyVectorcall_NARGS(nargsf);
+
+  // Enforce Keyword-Only Arguments
+  // If nargs > 0 (positionals passed) OR kwnames is NULL (no keywords passed)
+  if (nargs > 0 || kwnames == NULL) {
+    PyErr_Format(PyExc_TypeError,
+                 "[HyperGL] pipeline only takes keyword-only arguments");
+    return NULL;
+  }
+  // Variable Declarations
   PyObject *create_kwargs = NULL;
   GLObject *program = NULL;
   PyObject *uniform_layout = NULL;
@@ -4991,78 +5023,74 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
 
   // -------------------------------------------------------------------------
   // 2. PRE-INITIALIZE DEFAULTS
-  // Because FastParse does not overwrite unprovided arguments, 
+  // Because FastParse does not overwrite unprovided arguments,
   // setting the default values here solves defaults permanently.
   // -------------------------------------------------------------------------
-  PyObject *template_obj    = NULL; // Was fetched via PyDict_GetItemString
-  PyObject *vertex_shader   = Py_None;
+  PyObject *template_obj = NULL; // Was fetched via PyDict_GetItemString
+  PyObject *vertex_shader = Py_None;
   PyObject *fragment_shader = Py_None;
-  PyObject *layout          = self->module_state->empty_tuple;
-  PyObject *resources       = self->module_state->empty_tuple;
-  PyObject *arg_uniforms    = Py_None;
-  PyObject *depth           = Py_None;
-  PyObject *stencil         = Py_None;
-  PyObject *blend           = Py_None;
+  PyObject *layout = self->module_state->empty_tuple;
+  PyObject *resources = self->module_state->empty_tuple;
+  PyObject *arg_uniforms = Py_None;
+  PyObject *depth = Py_None;
+  PyObject *stencil = Py_None;
+  PyObject *blend = Py_None;
   PyObject *framebuffer_arg = Py_None;
-  PyObject *vertex_buffers  = self->module_state->empty_tuple;
-  PyObject *index_buffer    = Py_None;
-  bool     short_index      = false; // Changed to bool to match 'p' parsing
-  PyObject *cull_face       = self->module_state->str_none;
-  PyObject *topology_arg    = self->module_state->str_triangles;
-  int      vertex_count     = 0;
-  int      instance_count   = 1;
-  int      first_vertex     = 0;
-  PyObject *viewport        = Py_None;
-  PyObject *arg_uniform_data= Py_None;
-  PyObject *viewport_data   = Py_None;
-  PyObject *render_data     = Py_None;
-  PyObject *includes        = Py_None;
-
-  // Enforce Keyword-Only Arguments
-  if (PyTuple_GET_SIZE(args) != 0 || !kwargs) {
-    PyErr_Format(PyExc_TypeError, "[HyperGL] pipeline only takes keyword-only arguments");
-    return NULL;
-  }
+  PyObject *vertex_buffers = self->module_state->empty_tuple;
+  PyObject *index_buffer = Py_None;
+  bool short_index = false; // Changed to bool to match 'p' parsing
+  PyObject *cull_face = self->module_state->str_none;
+  PyObject *topology_arg = self->module_state->str_triangles;
+  int vertex_count = 0;
+  int instance_count = 1;
+  int first_vertex = 0;
+  PyObject *viewport = Py_None;
+  PyObject *arg_uniform_data = Py_None;
+  PyObject *viewport_data = Py_None;
+  PyObject *render_data = Py_None;
+  PyObject *includes = Py_None;
 
   // -------------------------------------------------------------------------
   // 3. FAST-PARSE
-  // Map our C variables to the schema index array. 
+  // Map our C variables to the schema index array.
   // -------------------------------------------------------------------------
   void *targets[Pipeline_COUNT];
-  targets[IDX_PL_TEMPLATE]      = &template_obj;
-  targets[IDX_PL_VERT_SHADER]   = &vertex_shader;
-  targets[IDX_PL_FRAG_SHADER]   = &fragment_shader;
-  targets[IDX_PL_LAYOUT]        = &layout;
-  targets[IDX_PL_RESOURCES]     = &resources;
-  targets[IDX_PL_UNIFORMS]      = &arg_uniforms;
-  targets[IDX_PL_DEPTH]         = &depth;
-  targets[IDX_PL_STENCIL]       = &stencil;
-  targets[IDX_PL_BLEND]         = &blend;
-  targets[IDX_PL_FRAMEBUFFER]   = &framebuffer_arg;
-  targets[IDX_PL_VERT_BUFFERS]  = &vertex_buffers;
-  targets[IDX_PL_INDEX_BUFFER]  = &index_buffer;
-  targets[IDX_PL_SHORT_INDEX]   = &short_index;
-  targets[IDX_PL_CULL_FACE]     = &cull_face;
-  targets[IDX_PL_TOPOLOGY]      = &topology_arg;
-  targets[IDX_PL_VERT_COUNT]    = &vertex_count;
-  targets[IDX_PL_INST_COUNT]    = &instance_count;
-  targets[IDX_PL_FIRST_VERT]    = &first_vertex;
-  targets[IDX_PL_VIEWPORT]      = &viewport;
-  targets[IDX_PL_UNIFORM_DATA]  = &arg_uniform_data;
-  targets[IDX_PL_VIEWPORT_DATA] = &viewport_data;
-  targets[IDX_PL_RENDER_DATA]   = &render_data;
-  targets[IDX_PL_INCLUDES]      = &includes;
+  targets[IDX_PL_TEMPLATE] = (void *)&template_obj;
+  targets[IDX_PL_VERT_SHADER] = (void *)&vertex_shader;
+  targets[IDX_PL_FRAG_SHADER] = (void *)&fragment_shader;
+  targets[IDX_PL_LAYOUT] = (void *)&layout;
+  targets[IDX_PL_RESOURCES] = (void *)&resources;
+  targets[IDX_PL_UNIFORMS] = (void *)&arg_uniforms;
+  targets[IDX_PL_DEPTH] = (void *)&depth;
+  targets[IDX_PL_STENCIL] = (void *)&stencil;
+  targets[IDX_PL_BLEND] = (void *)&blend;
+  targets[IDX_PL_FRAMEBUFFER] = (void *)&framebuffer_arg;
+  targets[IDX_PL_VERT_BUFFERS] = (void *)&vertex_buffers;
+  targets[IDX_PL_INDEX_BUFFER] = (void *)&index_buffer;
+  targets[IDX_PL_SHORT_INDEX] = (void *)&short_index;
+  targets[IDX_PL_CULL_FACE] = (void *)&cull_face;
+  targets[IDX_PL_TOPOLOGY] = (void *)&topology_arg;
+  targets[IDX_PL_VERT_COUNT] = (void *)&vertex_count;
+  targets[IDX_PL_INST_COUNT] = (void *)&instance_count;
+  targets[IDX_PL_FIRST_VERT] = (void *)&first_vertex;
+  targets[IDX_PL_VIEWPORT] = (void *)&viewport;
+  targets[IDX_PL_UNIFORM_DATA] = (void *)&arg_uniform_data;
+  targets[IDX_PL_VIEWPORT_DATA] = (void *)&viewport_data;
+  targets[IDX_PL_RENDER_DATA] = (void *)&render_data;
+  targets[IDX_PL_INCLUDES] = (void *)&includes;
 
-  // Execute parsing. (Note: args is empty, kwargs has dict)
-  if (!FastParse_Unified(args, kwargs, NULL, &PipelineParser, targets)) {
-      goto fail; // Error state already set inside FastParse
+  // FastParse_Unified automatically detects the type of 'args' (PyObject*
+  // const*) and selects fp_parse_vector.
+  if (!FastParse_Unified(args, nargs, kwnames, &PipelineParser, targets)) {
+    return NULL; // FastParse handles the Exception setting
   }
 
   // -------------------------------------------------------------------------
   // 4. TEMPLATE LOGIC & DICT CLONING
   // -------------------------------------------------------------------------
+  PyObject *input_kwargs = NULL;
+  
   if (template_obj) {
-    // FastParse just borrows references, so INCREF if needed by template logic
     template = (Pipeline *)template_obj;
     if (Py_TYPE((PyObject *)template) != self->module_state->Pipeline_type) {
       PyErr_Format(PyExc_ValueError, "[HyperGL] invalid template");
@@ -5075,19 +5103,23 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
       goto fail;
     }
 
+    input_kwargs = dict_from_fastcall(args, nargs, kwnames);
+    if (!input_kwargs) goto fail;
+
     create_kwargs = PyDict_Copy(template->create_kwargs);
-    if (!create_kwargs) goto fail;
-    PyDict_Update(create_kwargs, kwargs);
+    if (!create_kwargs) { Py_DECREF(input_kwargs); goto fail; }
+
+    PyDict_Update(create_kwargs, input_kwargs);
     PyDict_DelItemString(create_kwargs, "template");
+    Py_DECREF(input_kwargs);
   } else {
-    create_kwargs = PyDict_Copy(kwargs);
-    if (!create_kwargs) goto fail;
-    
-    // Original template check enforcement
+    // Check requirements before building dict
     if (vertex_shader == Py_None || fragment_shader == Py_None) {
-      PyErr_SetString(PyExc_TypeError, "[HyperGL] vertex_shader and fragment_shader are required unless a template is provided.");
+      PyErr_SetString(PyExc_TypeError, "[HyperGL] vertex_shader and fragment_shader are required.");
       goto fail;
     }
+    create_kwargs = dict_from_fastcall(args, nargs, kwnames);
+    if (!create_kwargs) goto fail;
   }
 
   if (self->is_lost) {
@@ -5096,9 +5128,10 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
   }
 
   if (!template && (vertex_shader == Py_None || fragment_shader == Py_None)) {
-      PyErr_SetString(PyExc_TypeError, 
-          "[HyperGL] vertex_shader and fragment_shader are required unless a template is provided.");
-      goto fail;
+    PyErr_SetString(PyExc_TypeError,
+                    "[HyperGL] vertex_shader and fragment_shader are required "
+                    "unless a template is provided.");
+    goto fail;
   }
 
   Viewport viewport_value;
@@ -5108,7 +5141,8 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
 
   int topology;
   if (!get_topology(topology_arg, &topology)) {
-    PyErr_Format(PyExc_ValueError, "[HyperGL] invalid topology: %R", topology_arg);
+    PyErr_Format(PyExc_ValueError, "[HyperGL] invalid topology: %R",
+                 topology_arg);
     goto fail;
   }
 
@@ -5276,7 +5310,8 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
     goto fail;
   }
 
-  memset((char *)res + sizeof(PyObject), 0, sizeof(Pipeline) - sizeof(PyObject));
+  memset((char *)res + sizeof(PyObject), 0,
+         sizeof(Pipeline) - sizeof(PyObject));
 
   // CRITICAL: Initialize ALL fields to NULL/Zero immediately.
   // This makes the deallocator and the fail: block safe.
@@ -5329,18 +5364,15 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *
   res->params.instance_count = instance_count;
   res->params.first_vertex = first_vertex;
   if (index_buffer == Py_None) {
-      res->index_type = INDEX_TYPE_NONE;
-  #ifdef DEBUG
-      if (short_index) {
-          fprintf(stderr,
-              "[HyperGL] short_index set without index buffer\n");
-          abort();
-      }
-  #endif
+    res->index_type = INDEX_TYPE_NONE;
+#ifdef DEBUG
+    if (short_index) {
+      fprintf(stderr, "[HyperGL] short_index set without index buffer\n");
+      abort();
+    }
+#endif
   } else {
-      res->index_type = short_index
-          ? GL_UNSIGNED_SHORT
-          : GL_UNSIGNED_INT;
+    res->index_type = short_index ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT;
   }
 
   res->index_size = short_index ? 2 : 4;
@@ -5432,7 +5464,7 @@ fail:
     safe_release_buffer(&res->render_data_buffer);
     safe_release_buffer(&res->uniform_layout_buffer);
     safe_release_buffer(&res->uniform_data_buffer);
-    
+
     Py_DECREF(res);
   }
 
@@ -6120,192 +6152,170 @@ static PyObject *Context_meth_pack_indirect(Context *self, PyObject *args,
   return result;
 }
 
-static PyObject *Context_meth_new_frame(Context *self, PyObject *args,
-                                        PyObject *kwargs) {
-  static char *keywords[] = {"reset", "clear", NULL};
-  int reset = 1;
-  int clear = 1;
+static PyObject *Context_meth_new_frame(Context *self, PyObject *const *args, 
+                                        size_t nargsf, PyObject *kwnames) {
+    // 1. Defaults
+    bool reset = true;
+    bool clear = true;
 
-  // Fast path: if no arguments are provided, skip expensive parsing
-  if (PyTuple_GET_SIZE(args) > 0 || (kwargs && PyDict_Size(kwargs) > 0)) {
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|pp", keywords, &reset,
-                                     &clear)) {
-      return NULL;
-    }
-  }
+    // 2. Parse (Unified)
+    void *targets[NewFrame_COUNT];
+    targets[IDX_NF_RESET] = &reset;
+    targets[IDX_NF_CLEAR] = &clear;
 
-  if (self->is_lost) {
-    PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
-    return NULL;
-  }
-
-  // Process deletion queue
-  flush_trash(self);
-
-  // Holders for objects to be decremented OUTSIDE the lock
-  PyObject *trash_desc = NULL;
-  GlobalSettings *trash_settings = NULL;
-
-  PyMutex_Lock(&self->state_lock);
-
-  // 1. RESET LOGIC
-  if (reset) {
-    // Release DescriptorSet
-    if (self->current_descriptor_set) {
-      trash_desc = (PyObject *)self->current_descriptor_set;
-      release_descriptor_set(self, self->current_descriptor_set, 1);
-      self->current_descriptor_set = NULL;
+    auto nargs = PyVectorcall_NARGS(nargsf);
+    if (!FastParse_Unified(args, nargs, kwnames, &NewFrameParser, targets)) {
+        return NULL;
     }
 
-    // Release GlobalSettings
-    if (self->current_global_settings) {
-      trash_settings = self->current_global_settings;
-      release_global_settings(self, trash_settings, 1);
-      self->current_global_settings = NULL;
+    if (self->is_lost) {
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
+        return NULL;
     }
 
-    // Reset bitfields
-    self->is_stencil_default = 0;
-    self->is_mask_default = 0;
-    self->is_blend_default = 0;
+    // Process deletion queue (No arguments needed for this)
+    flush_trash(self);
 
-    // Reset cached IDs
-    self->current_viewport = (Viewport){-1, -1, -1, -1};
-    self->current_read_framebuffer = -1;
-    self->current_draw_framebuffer = -1;
-    self->current_program = -1;
-    self->current_vertex_array = -1;
-    self->current_depth_mask = 0;
-    self->current_stencil_mask = 0;
+    PyObject *trash_desc = NULL;
+    GlobalSettings *trash_settings = NULL;
 
-    // CRITICAL FIX: Invalidate shadow state.
-    // We set everything to UNKNOWN (-1) so next calls force an update.
-    // This handles cases where external C/ctypes calls might have dirtied the
-    // GL state.
-    memset(&self->gl_state, GL_STATE_UNKNOWN, sizeof(self->gl_state));
-  }
+    PyMutex_Lock(&self->state_lock);
 
-  // 2. CLEAR LOGIC
-  if (clear) {
-    int default_fbo = self->default_framebuffer->obj;
-    // Only bind if we aren't already bound
-    if (self->current_draw_framebuffer != default_fbo) {
-      bind_draw_framebuffer_internal(self, default_fbo);
+    // 1. RESET LOGIC
+    if (reset) {
+        if (self->current_descriptor_set) {
+            trash_desc = (PyObject *)self->current_descriptor_set;
+            release_descriptor_set(self, self->current_descriptor_set, 1);
+            self->current_descriptor_set = NULL;
+        }
+
+        if (self->current_global_settings) {
+            trash_settings = self->current_global_settings;
+            release_global_settings(self, trash_settings, 1);
+            self->current_global_settings = NULL;
+        }
+
+        self->is_stencil_default = 0;
+        self->is_mask_default = 0;
+        self->is_blend_default = 0;
+
+        self->current_viewport = (Viewport){-1, -1, -1, -1};
+        self->current_read_framebuffer = -1;
+        self->current_draw_framebuffer = -1;
+        self->current_program = -1;
+        self->current_vertex_array = -1;
+        self->current_depth_mask = 0;
+        self->current_stencil_mask = 0;
+
+        memset(&self->gl_state, GL_STATE_UNKNOWN, sizeof(self->gl_state));
     }
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-  }
 
-  // 3. STATE ENFORCEMENT
-  // Apply standard features for the new frame.
-  // Thanks to the shadow state check, these are free if already enabled.
+    // 2. CLEAR LOGIC
+    if (clear) {
+        int default_fbo = self->default_framebuffer->obj;
+        if (self->current_draw_framebuffer != default_fbo) {
+            bind_draw_framebuffer_internal(self, default_fbo);
+        }
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    }
 
-  if (!self->is_webgl) {
-    LOCKED_GL_ENABLE_STATE(GL_PRIMITIVE_RESTART_FIXED_INDEX, primitive_restart);
-  }
+    // 3. STATE ENFORCEMENT
+    if (!self->is_webgl) {
+        LOCKED_GL_ENABLE_STATE(GL_PRIMITIVE_RESTART_FIXED_INDEX, primitive_restart);
+    }
+    if (!self->is_gles) {
+        LOCKED_GL_ENABLE_STATE(GL_PROGRAM_POINT_SIZE, program_point_size);
+        LOCKED_GL_ENABLE_STATE(GL_TEXTURE_CUBE_MAP_SEAMLESS, seamless_cube);
+    }
 
-  if (!self->is_gles) {
-    LOCKED_GL_ENABLE_STATE(GL_PROGRAM_POINT_SIZE, program_point_size);
-    LOCKED_GL_ENABLE_STATE(GL_TEXTURE_CUBE_MAP_SEAMLESS, seamless_cube);
-  }
+    PyMutex_Unlock(&self->state_lock);
 
-  PyMutex_Unlock(&self->state_lock);
-
-  // Cleanup python objects outside the lock
-  Py_XDECREF(trash_desc);
-  // Py_XDECREF((PyObject *)trash_settings);
-
-  Py_RETURN_NONE;
+    Py_XDECREF(trash_desc);
+    Py_RETURN_NONE;
 }
 
-static PyObject *Context_meth_end_frame(Context *self, PyObject *args,
-                                        PyObject *kwargs) {
-  static char *keywords[] = {"clean", "flush", NULL};
-  int clean = 1;
-  int flush = 1;
-
-  if (PyTuple_GET_SIZE(args) > 0 || (kwargs && PyDict_Size(kwargs) > 0)) {
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|pp", keywords, &clean,
-                                     &flush)) {
-      return NULL;
-    }
-  }
-
-  if (self->is_lost) {
-    PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
-    return NULL;
-  }
-
-  flush_trash(self);
-
-  PyObject *trash_desc = NULL;
-  GlobalSettings *trash_settings = NULL;
-
-  PyMutex_Lock(&self->state_lock);
-
-  if (clean) {
-    // 1. Unbind GL Objects
-    if (self->current_draw_framebuffer != 0) {
-      bind_draw_framebuffer_internal(self, 0);
-    }
-    if (self->current_program != 0) {
-      bind_program_internal(self, 0);
-    }
-    if (self->current_vertex_array != 0) {
-      bind_vertex_array_internal(self, 0);
+static PyObject *Context_meth_end_frame(Context *self, PyObject *const *args, 
+                                        size_t nargsf, PyObject *kwnames) 
+{
+    // 1. Enforce Keyword-Only Arguments
+    auto nargs = PyVectorcall_NARGS(nargsf);
+    if (nargs > 0) {
+        PyErr_Format(PyExc_TypeError, 
+                     "[HyperGL] end_frame only takes keyword-only arguments");
+        return NULL;
     }
 
-    // 2. Release Internal Resources
-    if (self->current_descriptor_set) {
-      trash_desc = (PyObject *)self->current_descriptor_set;
-      release_descriptor_set(self, self->current_descriptor_set, 1);
-      self->current_descriptor_set = NULL;
+    // 2. Pre-initialize Defaults
+    bool clean = true;
+    bool flush = true;
+
+    // 3. FastParse
+    void *targets[EndFrame_COUNT];
+    targets[IDX_EF_CLEAN] = &clean;
+    targets[IDX_EF_FLUSH] = &flush;
+
+    if (!FastParse_Unified(args, nargs, kwnames, &EndFrameParser, targets)) {
+        return NULL; 
     }
 
-    if (self->current_global_settings) {
-      trash_settings = self->current_global_settings;
-      release_global_settings(self, trash_settings, 1);
-      self->current_global_settings = NULL;
+    // 4. Runtime Validation
+    if (self->is_lost) {
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] the context is lost");
+        return NULL;
     }
 
-    // 3. Reset Active Texture
-    // Safety check: GL_TEXTURE0 is 0x84C0, not 0.
-    // If default_texture_unit is 0, it's likely uninitialized.
-    if (self->default_texture_unit != 0) {
-      glActiveTexture(self->default_texture_unit);
+    // 5. Logic
+    flush_trash(self);
+
+    PyObject *trash_desc = NULL;
+    GlobalSettings *trash_settings = NULL;
+
+    PyMutex_Lock(&self->state_lock);
+
+    if (clean) {
+        // ... (Your existing unbind/release logic) ...
+        if (self->current_draw_framebuffer != 0) bind_draw_framebuffer_internal(self, 0);
+        if (self->current_program != 0) bind_program_internal(self, 0);
+        if (self->current_vertex_array != 0) bind_vertex_array_internal(self, 0);
+
+        if (self->current_descriptor_set) {
+            trash_desc = (PyObject *)self->current_descriptor_set;
+            release_descriptor_set(self, self->current_descriptor_set, 1);
+            self->current_descriptor_set = NULL;
+        }
+
+        if (self->current_global_settings) {
+            trash_settings = self->current_global_settings;
+            release_global_settings(self, trash_settings, 1);
+            self->current_global_settings = NULL;
+        }
+
+        if (self->default_texture_unit != 0) glActiveTexture(self->default_texture_unit);
+
+        LOCKED_GL_DISABLE_STATE(GL_CULL_FACE, cull_face);
+        LOCKED_GL_DISABLE_STATE(GL_DEPTH_TEST, depth_test);
+        LOCKED_GL_DISABLE_STATE(GL_STENCIL_TEST, stencil_test);
+        LOCKED_GL_DISABLE_STATE(GL_BLEND, blend);
+
+        if (!self->is_webgl) LOCKED_GL_DISABLE_STATE(GL_PRIMITIVE_RESTART_FIXED_INDEX, primitive_restart);
+        if (!self->is_gles) {
+            LOCKED_GL_DISABLE_STATE(GL_PROGRAM_POINT_SIZE, program_point_size);
+            LOCKED_GL_DISABLE_STATE(GL_TEXTURE_CUBE_MAP_SEAMLESS, seamless_cube);
+        }
+
+        self->is_blend_default = 0;
+        self->is_stencil_default = 0;
+        self->is_mask_default = 0;
     }
 
-    // 4. Disable States (using Shadow Cache)
-    LOCKED_GL_DISABLE_STATE(GL_CULL_FACE, cull_face);
-    LOCKED_GL_DISABLE_STATE(GL_DEPTH_TEST, depth_test);
-    LOCKED_GL_DISABLE_STATE(GL_STENCIL_TEST, stencil_test);
-    LOCKED_GL_DISABLE_STATE(GL_BLEND, blend);
-
-    if (!self->is_webgl) {
-      LOCKED_GL_DISABLE_STATE(GL_PRIMITIVE_RESTART_FIXED_INDEX,
-                              primitive_restart);
+    if (flush) {
+        glFlush();
     }
 
-    if (!self->is_gles) {
-      LOCKED_GL_DISABLE_STATE(GL_PROGRAM_POINT_SIZE, program_point_size);
-      LOCKED_GL_DISABLE_STATE(GL_TEXTURE_CUBE_MAP_SEAMLESS, seamless_cube);
-    }
+    PyMutex_Unlock(&self->state_lock);
 
-    // Reset Python-side flags
-    self->is_blend_default = 0;
-    self->is_stencil_default = 0;
-    self->is_mask_default = 0;
-  }
-
-  if (flush) {
-    glFlush();
-  }
-
-  PyMutex_Unlock(&self->state_lock);
-
-  Py_XDECREF(trash_desc);
-  // Py_XDECREF((PyObject *)trash_settings);
-
-  Py_RETURN_NONE;
+    Py_XDECREF(trash_desc);
+    Py_RETURN_NONE;
 }
 
 static PyObject *Context_meth_release(Context *self, PyObject *arg) {
@@ -9984,14 +9994,14 @@ static PyMethodDef Context_methods[] = {
      METH_VARARGS | METH_KEYWORDS, NULL},
     {"image", (PyCFunction)Context_meth_image, METH_VARARGS | METH_KEYWORDS,
      NULL},
-    {"pipeline", (PyCFunction)Context_meth_pipeline,
-     METH_VARARGS | METH_KEYWORDS, NULL},
+    {"pipeline", (PyCFunction)(void(*)(void))Context_meth_pipeline,
+ METH_FASTCALL | METH_KEYWORDS, NULL},
     {"compute", (PyCFunction)Context_meth_compute, METH_VARARGS | METH_KEYWORDS,
      NULL},
-    {"new_frame", (PyCFunction)Context_meth_new_frame,
-     METH_VARARGS | METH_KEYWORDS, NULL},
-    {"end_frame", (PyCFunction)Context_meth_end_frame,
-     METH_VARARGS | METH_KEYWORDS, NULL},
+    {"new_frame", (PyCFunction)(void(*)(void))Context_meth_new_frame, 
+ METH_FASTCALL | METH_KEYWORDS, NULL},
+    {"end_frame", (PyCFunction)(void(*)(void))Context_meth_end_frame, 
+ METH_FASTCALL | METH_KEYWORDS, NULL},
     {"release", (PyCFunction)Context_meth_release, METH_O, NULL},
     {"migrate", (PyCFunction)Context_meth_migrate, METH_NOARGS, NULL},
     {"release_thread", (PyCFunction)Context_meth_release_thread, METH_NOARGS, NULL},
