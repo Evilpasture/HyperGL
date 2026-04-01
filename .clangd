@@ -1,0 +1,13 @@
+CompileFlags:
+  Add: [
+    "-std=c23",
+    "-m64",
+    "-fms-extensions",
+    "-Wno-unknown-attributes",
+    "-D_CRT_SECURE_NO_WARNINGS",
+    "-DPy_GIL_DISABLED=1"
+  ]
+  CompilationDatabase: "."
+
+Index:
+  Background: Build
