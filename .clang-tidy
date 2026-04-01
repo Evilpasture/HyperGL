@@ -1,0 +1,32 @@
+# .clang-tidy
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-core.*,
+  clang-analyzer-unix.Malloc,
+  performance-*,
+  readability-redundant-declaration,
+  -bugprone-easily-swappable-parameters,
+  bugprone-suspicious-include,
+  bugprone-too-small-loop-variable,
+  performance-no-automatic-move
+
+WarningsAsErrors: ''
+
+CheckOptions:
+  # CPython & OpenGL often use many parameters of the same type (int, float, PyObject*)
+  # We increase the threshold to 4 to avoid noise in boilerplate-heavy APIs.
+  - key:             bugprone-easily-swappable-parameters.MinimumLength
+    value:           '4'
+  - key:             bugprone-easily-swappable-parameters.IgnoredParameterNames
+    value:           'index;count;size;width;height;x;y;z;w;r;g;b;a;target;pname;usage'
+  
+  # CPython's PyObject* and OpenGL's void* often trigger "magic number" or pointer warnings.
+  # We can exclude specific types from being considered "swappable" if needed.
+  - key:             bugprone-easily-swappable-parameters.IgnoredParameterTypeSuffixes
+    value:           'PyObject;GLuint;GLenum;GLint'
+
+  # Performance tweak: CPython objects are almost always passed by pointer,
+  # so we don't want to nag about "const reference" for small types.
+  - key:             performance-for-range-copy.WarnOnAllAutoCopies
+    value:           'false'
