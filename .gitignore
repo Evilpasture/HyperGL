@@ -1,0 +1,8 @@
+.idea
+.vscode
+vc140.pdb
+build
+hypergl.egg-info
+.venv
+.clang-tidy
+.cache
