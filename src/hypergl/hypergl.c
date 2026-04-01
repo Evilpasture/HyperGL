@@ -7,6 +7,7 @@
 // -----------------------------------------------------------------------------
 
 #include "hypergl_defs.h"
+#include "hypergl_arg_indices.h"
 
 #ifndef EXTERN_GL
 // This defines a static function pointer with the correct calling convention
@@ -4968,15 +4969,13 @@ static int Buffer_set_name(Buffer *self, PyObject *value, void *closure) {
 // Type: Pipeline
 // -----------------------------------------------------------------------------
 
-static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
-                                       PyObject *kwargs) {
+static Pipeline *Context_meth_pipeline(Context *self, PyObject *args, PyObject *kwargs) {
   // 1. Variable Declarations
   PyObject *create_kwargs = NULL;
   GLObject *program = NULL;
   PyObject *uniform_layout = NULL;
   PyObject *validate = NULL;
   PyObject *layout_bindings = NULL;
-  PyObject *template_obj = NULL;
   PyObject *framebuffer_attachments = NULL;
   PyObject *vertex_array_bindings = NULL;
   PyObject *resource_bindings = NULL;
@@ -4988,95 +4987,107 @@ static Pipeline *Context_meth_pipeline(Context *self, PyObject *args,
   DescriptorSet *descriptor_set = NULL;
   GlobalSettings *global_settings = NULL;
   Pipeline *res = NULL;
-
-  // 2. Argument Parsing
-  static char *keywords[] = {
-      "vertex_shader", "fragment_shader", "layout",       "resources",
-      "uniforms",      "depth",           "stencil",      "blend",
-      "framebuffer",   "vertex_buffers",  "index_buffer", "short_index",
-      "cull_face",     "topology",        "vertex_count", "instance_count",
-      "first_vertex",  "viewport",        "uniform_data", "viewport_data",
-      "render_data",   "includes",        NULL,
-  };
-
-  PyObject *vertex_shader = Py_None;
-  PyObject *fragment_shader = Py_None;
-  PyObject *layout = self->module_state->empty_tuple;
-  PyObject *resources = self->module_state->empty_tuple;
-  PyObject *arg_uniforms = Py_None;
-  PyObject *depth = Py_None;
-  PyObject *stencil = Py_None;
-  PyObject *blend = Py_None;
-  PyObject *framebuffer_arg = Py_None;
-  PyObject *vertex_buffers = self->module_state->empty_tuple;
-  PyObject *index_buffer = Py_None;
-  int short_index = 0;
-  PyObject *cull_face = self->module_state->str_none;
-  PyObject *topology_arg = self->module_state->str_triangles;
-  int vertex_count = 0;
-  int instance_count = 1;
-  int first_vertex = 0;
-  PyObject *viewport = Py_None;
-  PyObject *arg_uniform_data = Py_None;
-  PyObject *viewport_data = Py_None;
-  PyObject *render_data = Py_None;
-  PyObject *includes = Py_None;
-
-  if (PyTuple_GET_SIZE(args) != 0 || !kwargs) {
-    PyErr_Format(PyExc_TypeError,
-                 "[HyperGL] pipeline only takes keyword-only arguments");
-    return NULL;
-  }
-
   Pipeline *template = NULL;
-  template_obj = PyDict_GetItemString(kwargs, "template");
-  if (template_obj) {
-    Py_INCREF(template_obj);
-    template = (Pipeline *)template_obj;
-  }
 
-  if (template &&
-      Py_TYPE((PyObject *)template) != self->module_state->Pipeline_type) {
-    PyErr_Format(PyExc_ValueError, "[HyperGL] invalid template");
+  // -------------------------------------------------------------------------
+  // 2. PRE-INITIALIZE DEFAULTS
+  // Because FastParse does not overwrite unprovided arguments, 
+  // setting the default values here solves defaults permanently.
+  // -------------------------------------------------------------------------
+  PyObject *template_obj    = NULL; // Was fetched via PyDict_GetItemString
+  PyObject *vertex_shader   = Py_None;
+  PyObject *fragment_shader = Py_None;
+  PyObject *layout          = self->module_state->empty_tuple;
+  PyObject *resources       = self->module_state->empty_tuple;
+  PyObject *arg_uniforms    = Py_None;
+  PyObject *depth           = Py_None;
+  PyObject *stencil         = Py_None;
+  PyObject *blend           = Py_None;
+  PyObject *framebuffer_arg = Py_None;
+  PyObject *vertex_buffers  = self->module_state->empty_tuple;
+  PyObject *index_buffer    = Py_None;
+  bool     short_index      = false; // Changed to bool to match 'p' parsing
+  PyObject *cull_face       = self->module_state->str_none;
+  PyObject *topology_arg    = self->module_state->str_triangles;
+  int      vertex_count     = 0;
+  int      instance_count   = 1;
+  int      first_vertex     = 0;
+  PyObject *viewport        = Py_None;
+  PyObject *arg_uniform_data= Py_None;
+  PyObject *viewport_data   = Py_None;
+  PyObject *render_data     = Py_None;
+  PyObject *includes        = Py_None;
+
+  // Enforce Keyword-Only Arguments
+  if (PyTuple_GET_SIZE(args) != 0 || !kwargs) {
+    PyErr_Format(PyExc_TypeError, "[HyperGL] pipeline only takes keyword-only arguments");
     return NULL;
   }
 
-  if (template) {
-    if (PyDict_GetItemString(kwargs, "vertex_shader") ||
-        PyDict_GetItemString(kwargs, "fragment_shader") ||
-        PyDict_GetItemString(kwargs, "layout") ||
-        PyDict_GetItemString(kwargs, "includes")) {
-      PyErr_Format(PyExc_ValueError, "[HyperGL] cannot use template with "
-                                     "shader/layout/includes specified");
-      return NULL;
-    }
-    create_kwargs = PyDict_Copy(template->create_kwargs);
-    if (!create_kwargs) {
+  // -------------------------------------------------------------------------
+  // 3. FAST-PARSE
+  // Map our C variables to the schema index array. 
+  // -------------------------------------------------------------------------
+  void *targets[Pipeline_COUNT];
+  targets[IDX_PL_TEMPLATE]      = &template_obj;
+  targets[IDX_PL_VERT_SHADER]   = &vertex_shader;
+  targets[IDX_PL_FRAG_SHADER]   = &fragment_shader;
+  targets[IDX_PL_LAYOUT]        = &layout;
+  targets[IDX_PL_RESOURCES]     = &resources;
+  targets[IDX_PL_UNIFORMS]      = &arg_uniforms;
+  targets[IDX_PL_DEPTH]         = &depth;
+  targets[IDX_PL_STENCIL]       = &stencil;
+  targets[IDX_PL_BLEND]         = &blend;
+  targets[IDX_PL_FRAMEBUFFER]   = &framebuffer_arg;
+  targets[IDX_PL_VERT_BUFFERS]  = &vertex_buffers;
+  targets[IDX_PL_INDEX_BUFFER]  = &index_buffer;
+  targets[IDX_PL_SHORT_INDEX]   = &short_index;
+  targets[IDX_PL_CULL_FACE]     = &cull_face;
+  targets[IDX_PL_TOPOLOGY]      = &topology_arg;
+  targets[IDX_PL_VERT_COUNT]    = &vertex_count;
+  targets[IDX_PL_INST_COUNT]    = &instance_count;
+  targets[IDX_PL_FIRST_VERT]    = &first_vertex;
+  targets[IDX_PL_VIEWPORT]      = &viewport;
+  targets[IDX_PL_UNIFORM_DATA]  = &arg_uniform_data;
+  targets[IDX_PL_VIEWPORT_DATA] = &viewport_data;
+  targets[IDX_PL_RENDER_DATA]   = &render_data;
+  targets[IDX_PL_INCLUDES]      = &includes;
+
+  // Execute parsing. (Note: args is empty, kwargs has dict)
+  if (!FastParse_Unified(args, kwargs, NULL, &PipelineParser, targets)) {
+      goto fail; // Error state already set inside FastParse
+  }
+
+  // -------------------------------------------------------------------------
+  // 4. TEMPLATE LOGIC & DICT CLONING
+  // -------------------------------------------------------------------------
+  if (template_obj) {
+    // FastParse just borrows references, so INCREF if needed by template logic
+    template = (Pipeline *)template_obj;
+    if (Py_TYPE((PyObject *)template) != self->module_state->Pipeline_type) {
+      PyErr_Format(PyExc_ValueError, "[HyperGL] invalid template");
       goto fail;
     }
+
+    if (vertex_shader != Py_None || fragment_shader != Py_None ||
+        layout != self->module_state->empty_tuple || includes != Py_None) {
+      PyErr_Format(PyExc_ValueError, "[HyperGL] cannot use template with shader/layout/includes specified");
+      goto fail;
+    }
+
+    create_kwargs = PyDict_Copy(template->create_kwargs);
+    if (!create_kwargs) goto fail;
     PyDict_Update(create_kwargs, kwargs);
     PyDict_DelItemString(create_kwargs, "template");
   } else {
     create_kwargs = PyDict_Copy(kwargs);
-    if (!create_kwargs) {
+    if (!create_kwargs) goto fail;
+    
+    // Original template check enforcement
+    if (vertex_shader == Py_None || fragment_shader == Py_None) {
+      PyErr_SetString(PyExc_TypeError, "[HyperGL] vertex_shader and fragment_shader are required unless a template is provided.");
       goto fail;
     }
-  }
-
-  if (!PyArg_ParseTupleAndKeywords(
-        args, create_kwargs, "|$OOOOOOOOOOOpOOiiiOOOOO", keywords,
-        &vertex_shader, &fragment_shader, 
-        &layout, &resources, &arg_uniforms, &depth, &stencil, &blend,
-        &framebuffer_arg, &vertex_buffers, &index_buffer, 
-        &short_index,    // matches 'p'
-        &cull_face,      // matches 'O'
-        &topology_arg,   // matches 'O'
-        &vertex_count,   // matches 'i'
-        &instance_count, // matches 'i'
-        &first_vertex,   // matches 'i'
-        &viewport, &arg_uniform_data, &viewport_data,
-        &render_data, &includes)) {
-      goto fail;
   }
 
   if (self->is_lost) {
@@ -10401,6 +10412,8 @@ static int module_exec(PyObject *self) {
   state->HyperGLError = PyErr_NewException("hypergl.Error", NULL, NULL);
   PyModule_AddObject(self, "Error", new_ref(state->HyperGLError));
 
+  hypergl_init_all_parsers();
+
 #define CREATE_TYPE(obj_type, spec)                                            \
   state->obj_type =                                                            \
       (PyTypeObject *)PyType_FromModuleAndSpec(self, &(spec), NULL);           \
@@ -10582,6 +10595,7 @@ static void module_free(void *m) {
     state->opengl_handle = NULL;
   }
 #endif
+  hypergl_free_all_parsers();
 }
 
 static PyModuleDef module_def = {

@@ -1,6 +1,7 @@
 [build-system]
-requires = ["setuptools==75.6.0", "wheel"]
-build-backend = "setuptools.build_meta"
+# We replace setuptools with scikit-build-core
+requires = ["scikit-build-core>=0.10.0"]
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "hypergl"
@@ -9,7 +10,7 @@ description = "High Performance, Modernized OpenGL wrapper"
 readme = "README.md"
 authors = [{name = "Mai Huy Hiếu"}]
 license = { text = "MIT" }
-# 3.13 is the first stable release with free-threading support. 
+# Matches your 3.13+ free-threading requirement
 requires-python = ">=3.13" 
 classifiers = [
     "Programming Language :: Python :: 3.13",
@@ -21,12 +22,39 @@ classifiers = [
     "Operating System :: MacOS",
 ]
 
-[tool.setuptools]
-packages = ["hypergl", "hypergl-stubs"]
-include-package-data = true
+# --- Scikit-Build-Core Configuration ---
+[tool.scikit-build]
+wheel.install-dir = "hypergl"
+wheel.exclude = [
+    "culverin/include/**",
+    "culverin/lib/**",
+    "culverin/share/**",
+    "src/**",
+    "**/*.c",
+    "**/*.h",
+    "**/*.cpp",
+    "**/*.obj",
+    "**/*.a",
+    "**/*.lib",
+    "**/*.pdb"
+]
+
+cmake.args = [
+    "-DCMAKE_C_STANDARD=23",
+    "-DCMAKE_C_EXTENSIONS=ON",
+    "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON",
+    # Force Clang-cl or Clang as the compiler
+    "-GNinja",
+    "-DCMAKE_C_COMPILER=clang-cl", 
+    "-DCMAKE_CXX_COMPILER=clang-cl"
+]   
 
 [tool.isort]
 line_length = 120
 multi_line_output = 5
 include_trailing_comma = true
 known_first_party = ["hypergl"]
+
+[tool.scikit-build.sdist]
+include = ["culverin/*.pyi", "extern/**", "src/**"]
+exclude = ["build/**", "dist/**"]
