@@ -37,6 +37,7 @@ static int parser_registry_count = 0;
 ALLOC_PARSER(Pipeline, Pipeline)
 ALLOC_PARSER(NewFrame, NewFrame)
 ALLOC_PARSER(EndFrame, EndFrame)
+ALLOC_PARSER(RenderIndirect, RenderIndirect)
 
 // --- 3. INITIALIZATION & TEARDOWN ---
 
@@ -44,6 +45,7 @@ void hypergl_init_all_parsers(void) {
     SETUP_PARSER(Pipeline, Pipeline, SCHEMA_PIPELINE);
     SETUP_PARSER(NewFrame, NewFrame, SCHEMA_NEW_FRAME);
     SETUP_PARSER(EndFrame, EndFrame, SCHEMA_END_FRAME);
+    SETUP_PARSER(RenderIndirect, RenderIndirect, SCHEMA_RENDER_INDIRECT);
 }
 
 void hypergl_free_all_parsers(void) {

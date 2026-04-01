@@ -3460,7 +3460,7 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
   res->is_webgl = (raw_version && startswith(raw_version, "WebGL")) ? 1 : 0;
 
   PyObject *tmp = Py_BuildValue(
-      CONTEXT_INFO_FORMAT, "vendor", raw_vendor ? raw_vendor : "Unknown",
+      "{szszszszsisisisisisisi}", "vendor", raw_vendor ? raw_vendor : "Unknown",
       "renderer", raw_renderer ? raw_renderer : "Unknown", "version",
       raw_version ? raw_version : "Unknown", "glsl",
       raw_glsl ? raw_glsl : "Unknown", "max_uniform_buffer_bindings",
@@ -3481,7 +3481,7 @@ static PyObject *Context_new(PyTypeObject *type, PyObject *args,
 
   int max_texture_image_units =
       get_limit(GL_MAX_TEXTURE_IMAGE_UNITS, 8, MAX_SAMPLER_BINDINGS + 1);
-  res->default_texture_unit = GL_TEXTURE0 + (max_texture_image_units - 1);
+  res->default_texture_unit = (int)GL_TEXTURE0 + (max_texture_image_units - 1);
   if (res->default_texture_unit < 1) {
     res->default_texture_unit = 1;
   }
@@ -5531,7 +5531,7 @@ static int Pipeline_clear(Pipeline *self) {
 
 static PyObject *
 Pipeline_meth_render(const Pipeline *self,
-                     PyObject *args) // LGTM. Don’t overthink this path.
+                     PyObject *Py_UNUSED(ignored)) // LGTM. Don’t overthink this path.
                                      // Indirect handles the scaling problem.
 {
   if (self->ctx->is_lost) {
@@ -5571,137 +5571,104 @@ Pipeline_meth_render(const Pipeline *self,
   Py_RETURN_NONE;
 }
 
-static PyObject *Pipeline_meth_render_indirect(const Pipeline *self,
-                                               PyObject *args,
-                                               PyObject *kwargs) {
-  static char *keywords[] = {"buffer", "count", "offset", "stride", NULL};
-  PyObject *buffer_obj;
-  int draw_count;
-  int offset = 0;
-  int stride = self->index_type ? sizeof(DrawElementsIndirectCommand)
-                                : sizeof(DrawArraysIndirectCommand);
+static PyObject *Pipeline_meth_render_indirect(const Pipeline *self, 
+                                               PyObject *const *args, 
+                                               size_t nargsf, 
+                                               PyObject *kwnames) 
+{
+    // 1. Parsing Vars
+    PyObject *buffer_obj = NULL;
+    int draw_count = 0;
+    int offset = 0;
+    int user_stride = -1; // -1 indicates "not provided"
 
-  int user_stride = -1;
+    // 2. Setup Targets
+    void *targets[RenderIndirect_COUNT];
+    targets[IDX_RI_BUFFER] = &buffer_obj;
+    targets[IDX_RI_COUNT]  = &draw_count;
+    targets[IDX_RI_OFFSET] = &offset;
+    targets[IDX_RI_STRIDE] = &user_stride;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "Oi|ii", keywords, &buffer_obj,
-                                   &draw_count, &offset, &user_stride)) {
-    return NULL;
-  }
-
-  if (draw_count < 0) {
-    PyErr_SetString(PyExc_ValueError, "[HyperGL] count must be >= 0");
-    return NULL;
-  }
-
-  if (offset < 0) {
-    PyErr_SetString(PyExc_ValueError, "[HyperGL] offset must be >= 0");
-    return NULL;
-  }
-
-  if (user_stride > 0) {
-    stride = user_stride;
-  }
-
-  if (self->ctx->is_lost) {
-    PyErr_Format(PyExc_RuntimeError, "[HyperGL] context lost");
-    return NULL;
-  }
-
-  // --- AZDO Check ---
-  if (self->index_type) {
-    if (!glMultiDrawElementsIndirect) {
-      PyErr_SetString(PyExc_RuntimeError,
-                      "[HyperGL] glMultiDrawElementsIndirect not "
-                      "supported/loaded on this hardware.");
-      return NULL;
+    // 3. Parse
+    auto nargs = PyVectorcall_NARGS(nargsf);
+    if (!FastParse_Unified(args, nargs, kwnames, &RenderIndirectParser, targets)) {
+        return NULL;
     }
-  } else {
-    if (!glMultiDrawArraysIndirect) {
-      PyErr_SetString(PyExc_RuntimeError,
-                      "[HyperGL] glMultiDrawArraysIndirect not "
-                      "supported/loaded on this hardware.");
-      return NULL;
+
+    // 4. Logic & Validation
+    if (draw_count < 0) {
+        PyErr_SetString(PyExc_ValueError, "[HyperGL] count must be >= 0");
+        return NULL;
     }
-  }
-  // ------------------
+    if (offset < 0) {
+        PyErr_SetString(PyExc_ValueError, "[HyperGL] offset must be >= 0");
+        return NULL;
+    }
 
-  if (!PyObject_TypeCheck(buffer_obj, self->ctx->module_state->Buffer_type)) {
-    PyErr_SetString(PyExc_TypeError,
-                    "[HyperGL] buffer must be a Buffer object");
-    return NULL;
-  }
-  Buffer *indirect_buffer = (Buffer *)buffer_obj;
+    if (self->ctx->is_lost) {
+        PyErr_Format(PyExc_RuntimeError, "[HyperGL] context lost");
+        return NULL;
+    }
 
-  PyMutex_Lock(&self->ctx->state_lock);
+    // --- AZDO Check ---
+    if (self->index_type ? !glMultiDrawElementsIndirect : !glMultiDrawArraysIndirect) {
+        PyErr_SetString(PyExc_RuntimeError, "[HyperGL] Indirect drawing not supported/loaded.");
+        return NULL;
+    }
 
-  Viewport *viewport = (Viewport *)self->viewport_data_buffer.buf;
-  Viewport v1 = self->ctx->current_viewport;
-  Viewport v2 = self->viewport;
+    if (!PyObject_TypeCheck(buffer_obj, self->ctx->module_state->Buffer_type)) {
+        PyErr_SetString(PyExc_TypeError, "[HyperGL] buffer must be a Buffer object");
+        return NULL;
+    }
+    Buffer *indirect_buffer = (Buffer *)buffer_obj;
 
-  // 1. Bind State
-  if (v1.x != v2.x || v1.y != v2.y || v1.width != v2.width ||
-      v1.height != v2.height) {
-    bind_viewport_internal(self->ctx, viewport);
-  }
-  if (self->ctx->current_global_settings != self->global_settings) {
+    int stride = self->index_type ? sizeof(DrawElementsIndirectCommand) 
+                                  : sizeof(DrawArraysIndirectCommand);
+    if (user_stride > 0) stride = user_stride;
+
+    PyMutex_Lock(&self->ctx->state_lock);
+
+    // Bind State (Internal helpers handle shadow-state check automatically)
+    bind_viewport_internal(self->ctx, (Viewport *)self->viewport_data_buffer.buf);
     bind_global_settings_internal(self->ctx, self->global_settings);
-  }
-  if (self->ctx->current_draw_framebuffer != self->framebuffer->obj) {
     bind_draw_framebuffer_internal(self->ctx, self->framebuffer->obj);
-  }
-  if (self->ctx->current_program != self->program->obj) {
     bind_program_internal(self->ctx, self->program->obj);
-  }
-  if (self->ctx->current_vertex_array != self->vertex_array->obj) {
     bind_vertex_array_internal(self->ctx, self->vertex_array->obj);
-  }
-  if (self->ctx->current_descriptor_set != self->descriptor_set) {
     bind_descriptor_set_internal(self->ctx, self->descriptor_set);
-  }
 
-  if (self->uniforms) {
-    bind_uniforms(self);
-  }
+    if (self->uniforms) bind_uniforms(self);
 
-  // 2. Bind Indirect Buffer
-  glBindBuffer(GL_DRAW_INDIRECT_BUFFER, indirect_buffer->buffer);
+    // Bind Indirect Buffer
+    glBindBuffer(GL_DRAW_INDIRECT_BUFFER, indirect_buffer->buffer);
 
-  intptr_t command_size = self->index_type ? sizeof(DrawElementsIndirectCommand)
-                                           : sizeof(DrawArraysIndirectCommand);
+    intptr_t command_size = self->index_type ? sizeof(DrawElementsIndirectCommand) 
+                                             : sizeof(DrawArraysIndirectCommand);
 
-  if (stride < command_size || (stride % 4) != 0) {
-    PyErr_SetString(PyExc_ValueError, "[HyperGL] invalid indirect stride");
+    if (stride < command_size || (stride % 4) != 0) {
+        PyErr_SetString(PyExc_ValueError, "[HyperGL] invalid indirect stride");
+        PyMutex_Unlock(&self->ctx->state_lock);
+        return NULL;
+    }
+
+    intptr_t byte_offset = (intptr_t)offset * command_size;
+    size_t required = byte_offset + ((size_t)draw_count * stride);
+    if (required > (size_t)indirect_buffer->size) {
+        PyErr_SetString(PyExc_ValueError, "[HyperGL] indirect buffer too small");
+        PyMutex_Unlock(&self->ctx->state_lock);
+        return NULL;
+    }
+
+    glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+    const void *indirect_offset = (const void *)((unsigned char *)NULL + byte_offset);
+    
+    if (self->index_type) {
+        glMultiDrawElementsIndirect(self->topology, self->index_type, indirect_offset, draw_count, stride);
+    } else {
+        glMultiDrawArraysIndirect(self->topology, indirect_offset, draw_count, stride);
+    }
+
     PyMutex_Unlock(&self->ctx->state_lock);
-    return NULL;
-  }
-
-  intptr_t byte_offset = (intptr_t)offset * command_size;
-  size_t required = byte_offset + ((size_t)draw_count * stride);
-  if (required > indirect_buffer->size) {
-    PyErr_SetString(PyExc_ValueError, "[HyperGL] indirect buffer too small");
-    PyMutex_Unlock(&self->ctx->state_lock);
-    return NULL;
-  }
-  // 3. Issue Draw Call (TODO: should use the commented one when ready)
-  // if (indirect_buffer->gpu_dirty) {
-  //     glMemoryBarrier(GL_COMMAND_BARRIER_BIT);
-  //     indirect_buffer->gpu_dirty = 0;
-  // }
-  glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
-  const void *indirect_offset =
-      (const void *)((unsigned char *)NULL + byte_offset);
-  if (self->index_type) {
-    // Indexed Draw
-    glMultiDrawElementsIndirect(self->topology, self->index_type,
-                                indirect_offset, draw_count, stride);
-  } else {
-    // Array Draw
-    glMultiDrawArraysIndirect(self->topology, indirect_offset, draw_count,
-                              stride);
-  }
-
-  PyMutex_Unlock(&self->ctx->state_lock);
-  Py_RETURN_NONE;
+    Py_RETURN_NONE;
 }
 
 static PyObject *Pipeline_get_viewport(const Pipeline *self, void *closure) {
@@ -10085,8 +10052,8 @@ static PyMemberDef Image_members[] = {
 
 static PyMethodDef Pipeline_methods[] = {
     {"render", (PyCFunction)Pipeline_meth_render, METH_NOARGS, NULL},
-    {"render_indirect", (PyCFunction)Pipeline_meth_render_indirect,
-     METH_VARARGS | METH_KEYWORDS, NULL},
+    {"render_indirect", (PyCFunction)(void(*)(void))Pipeline_meth_render_indirect,
+ METH_FASTCALL | METH_KEYWORDS, NULL},
     {0},
 };
 
