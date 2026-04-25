@@ -1,3 +1,5 @@
+**NOTE:** Archived! I have a better version called [CaravanGL](https://github.com/Evilpasture/CaravanGL)! This project gave me the first exposure to C so this has some sentimental value to me
+
 # HyperGL
 
 **Zero-Overhead, Object-Oriented OpenGL 4.6 Engine for Python.**
